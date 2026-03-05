@@ -1,0 +1,77 @@
+{
+  "resumo": {
+    "total_transportadoras": 55,
+    "total_motoristas": 205,
+    "total_embarcadores": 45,
+    "total_cargas": 243,
+    "cargas_realizadas": 150,
+    "cargas_disponiveis": 38,
+    "cargas_futuras": 55,
+    "valor_total_fretes_realizados": 2847500.00,
+    "valor_total_fretes_disponiveis": 142300.00,
+    "peso_total_kg_realizadas": 2850000,
+    "peso_medio_kg_por_carga": 19000,
+    "valor_medio_frete_realizado": 18983.33
+  },
+  "cargas_por_tipo": [
+    { "tipo_carga": "Cimento", "quantidade": 28, "valor_total": 520000 },
+    { "tipo_carga": "Soja", "quantidade": 22, "valor_total": 410000 },
+    { "tipo_carga": "Milho", "quantidade": 18, "valor_total": 335000 },
+    { "tipo_carga": "Fertilizantes", "quantidade": 16, "valor_total": 298000 },
+    { "tipo_carga": "Calcário", "quantidade": 14, "valor_total": 265000 },
+    { "tipo_carga": "Brita", "quantidade": 12, "valor_total": 228000 },
+    { "tipo_carga": "Adubo", "quantidade": 11, "valor_total": 205000 },
+    { "tipo_carga": "Concreto", "quantidade": 10, "valor_total": 188000 },
+    { "tipo_carga": "Minério", "quantidade": 9, "valor_total": 168000 },
+    { "tipo_carga": "Gesso", "quantidade": 8, "valor_total": 152000 }
+  ],
+  "cargas_por_uf_origem": [
+    { "estado": "SP", "quantidade": 52 },
+    { "estado": "MG", "quantidade": 38 },
+    { "estado": "PR", "quantidade": 31 },
+    { "estado": "RS", "quantidade": 28 },
+    { "estado": "SC", "quantidade": 22 },
+    { "estado": "GO", "quantidade": 18 },
+    { "estado": "BA", "quantidade": 14 },
+    { "estado": "RJ", "quantidade": 12 },
+    { "estado": "MT", "quantidade": 10 },
+    { "estado": "Outros", "quantidade": 8 }
+  ],
+  "cargas_por_uf_destino": [
+    { "estado": "SP", "quantidade": 48 },
+    { "estado": "MG", "quantidade": 35 },
+    { "estado": "PR", "quantidade": 33 },
+    { "estado": "RS", "quantidade": 30 },
+    { "estado": "SC", "quantidade": 25 },
+    { "estado": "GO", "quantidade": 20 },
+    { "estado": "BA", "quantidade": 15 },
+    { "estado": "RJ", "quantidade": 14 },
+    { "estado": "MT", "quantidade": 11 },
+    { "estado": "Outros", "quantidade": 8 }
+  ],
+  "cargas_por_composicao": [
+    { "composicao_veiculo": "Carreta", "quantidade": 72 },
+    { "composicao_veiculo": "Caminhão Truck", "quantidade": 58 },
+    { "composicao_veiculo": "Bitrem", "quantidade": 42 },
+    { "composicao_veiculo": "Caminhão Toco", "quantidade": 28 },
+    { "composicao_veiculo": "Rodotrem", "quantidade": 22 },
+    { "composicao_veiculo": "Caminhão Bitruck", "quantidade": 15 },
+    { "composicao_veiculo": "Caminhão 3/4", "quantidade": 6 }
+  ],
+  "cargas_por_mes": [
+    { "ano_mes": "2024-09", "realizadas": 12, "valor_total": 228000 },
+    { "ano_mes": "2024-10", "realizadas": 18, "valor_total": 342000 },
+    { "ano_mes": "2024-11", "realizadas": 22, "valor_total": 418000 },
+    { "ano_mes": "2024-12", "realizadas": 25, "valor_total": 475000 },
+    { "ano_mes": "2025-01", "realizadas": 28, "valor_total": 532000 },
+    { "ano_mes": "2025-02", "realizadas": 31, "valor_total": 589000 },
+    { "ano_mes": "2025-03", "realizadas": 14, "valor_total": 263000 }
+  ],
+  "data_quality": {
+    "transportadoras_com_problema": 5,
+    "motoristas_com_problema": 5,
+    "embarcadores_com_problema": 5,
+    "cargas_com_problema": 8,
+    "total_registros_com_problema": 23
+  }
+}

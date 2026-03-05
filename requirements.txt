@@ -1,0 +1,6 @@
+# Logística de Caminhões - dependências
+# Para uso local ou Databricks (Databricks já inclui PySpark e Delta)
+
+pyspark>=3.4.0
+delta-spark>=2.4.0
+faker>=22.0.0

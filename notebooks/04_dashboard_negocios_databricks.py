@@ -203,31 +203,55 @@ display(
 
 # MAGIC %md
 # MAGIC ## 9. Data Quality – registros com possível problema
-# MAGIC **Visualização:** **Table** ou **Bar chart**
-# MAGIC - **Table:** mostra tabela × quantidade de registros com problema (leitura precisa).
-# MAGIC - **Bar chart:** **X:** `tabela` | **Y:** `registros_com_problema` para comparar rapidamente onde há mais falhas.
-# MAGIC Heurísticas: CNPJ/CPF tamanho ≠ 14/11, nome vazio, UF inválida, peso/valor negativo.
+# MAGIC **Regras:** documentadas em `docs/data_quality_rules.md` (alinhadas ao notebook `02_incluir_dados_qualidade_ruim.py`).
+# MAGIC **Visualização:** **Table** (resumo por tabela) e **Table** (detalhe por regra).
+# MAGIC - Resumo: tabela × quantidade de registros com **qualquer** problema.
+# MAGIC - Por regra: tabela × regra × quantidade (para ver qual regra falha mais).
 
 # COMMAND ----------
 
 display(
   spark.sql(f"""
-    SELECT 'Transportadoras' AS tabela,
-           COUNT(*) AS registros_com_problema
-    FROM {CATALOG}.{SCHEMA}.transportadoras
-    WHERE LENGTH(TRIM(cnpj)) != 14 OR TRIM(nome) = '' OR estado NOT IN ('AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO')
-    UNION ALL
-    SELECT 'Motoristas', COUNT(*)
-    FROM {CATALOG}.{SCHEMA}.motoristas
-    WHERE LENGTH(TRIM(cpf)) != 11
-    UNION ALL
-    SELECT 'Embarcadores', COUNT(*)
-    FROM {CATALOG}.{SCHEMA}.embarcadores
-    WHERE LENGTH(TRIM(cnpj)) != 14 OR TRIM(nome) = '' OR estado NOT IN ('AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO')
-    UNION ALL
-    SELECT 'Cargas', COUNT(*)
-    FROM {CATALOG}.{SCHEMA}.cargas
-    WHERE peso_kg IS NULL OR peso_kg <= 0 OR valor_frete IS NULL OR valor_frete < 0
+    SELECT 'Transportadoras' AS tabela, COUNT(*) AS registros_com_problema FROM {CATALOG}.{SCHEMA}.transportadoras
+    WHERE LENGTH(TRIM(cnpj)) != 14 OR TRIM(COALESCE(nome, '')) = '' OR email NOT LIKE '%@%%' OR email IS NULL OR estado NOT IN ('AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO') OR data_cadastro > current_date()
+    UNION ALL SELECT 'Motoristas', COUNT(*) FROM {CATALOG}.{SCHEMA}.motoristas m
+    WHERE LENGTH(TRIM(m.cpf)) != 11 OR NOT EXISTS (SELECT 1 FROM {CATALOG}.{SCHEMA}.transportadoras t WHERE t.id = m.transportadora_id) OR m.categoria_cnh NOT IN ('C','D','E') OR m.categoria_cnh IS NULL OR m.email NOT LIKE '%@%%' OR m.email IS NULL
+    UNION ALL SELECT 'Embarcadores', COUNT(*) FROM {CATALOG}.{SCHEMA}.embarcadores
+    WHERE LENGTH(TRIM(cnpj)) != 14 OR TRIM(COALESCE(nome, '')) = '' OR email NOT LIKE '%@%%' OR email IS NULL OR estado NOT IN ('AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO')
+    UNION ALL SELECT 'Cargas', COUNT(*) FROM {CATALOG}.{SCHEMA}.cargas c
+    WHERE NOT EXISTS (SELECT 1 FROM {CATALOG}.{SCHEMA}.embarcadores e WHERE e.id = c.embarcador_id) OR (status = 'realizada' AND data_entrega IS NULL) OR data_prevista_entrega < data_prevista_coleta OR peso_kg IS NULL OR peso_kg <= 0 OR valor_frete IS NULL OR valor_frete < 0 OR (origem_estado = destino_estado AND origem_cidade = destino_cidade)
+  """)
+)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### 9.1 Data Quality por regra (detalhe)
+# MAGIC Uma linha por regra; mesma lógica do dataset `data_quality_regras` do dashboard.
+
+# COMMAND ----------
+
+display(
+  spark.sql(f"""
+    SELECT 'Transportadoras' AS tabela, 'CNPJ inválido' AS regra, COUNT(*) AS registros_com_problema FROM {CATALOG}.{SCHEMA}.transportadoras WHERE LENGTH(TRIM(cnpj)) != 14
+    UNION ALL SELECT 'Transportadoras', 'Nome vazio', COUNT(*) FROM {CATALOG}.{SCHEMA}.transportadoras WHERE TRIM(COALESCE(nome, '')) = ''
+    UNION ALL SELECT 'Transportadoras', 'Email inválido', COUNT(*) FROM {CATALOG}.{SCHEMA}.transportadoras WHERE email NOT LIKE '%@%%' OR email IS NULL
+    UNION ALL SELECT 'Transportadoras', 'UF inexistente', COUNT(*) FROM {CATALOG}.{SCHEMA}.transportadoras WHERE estado NOT IN ('AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO')
+    UNION ALL SELECT 'Transportadoras', 'Data cadastro no futuro', COUNT(*) FROM {CATALOG}.{SCHEMA}.transportadoras WHERE data_cadastro > current_date()
+    UNION ALL SELECT 'Motoristas', 'CPF inválido', COUNT(*) FROM {CATALOG}.{SCHEMA}.motoristas WHERE LENGTH(TRIM(cpf)) != 11
+    UNION ALL SELECT 'Motoristas', 'FK transportadora órfã', COUNT(*) FROM {CATALOG}.{SCHEMA}.motoristas m WHERE NOT EXISTS (SELECT 1 FROM {CATALOG}.{SCHEMA}.transportadoras t WHERE t.id = m.transportadora_id)
+    UNION ALL SELECT 'Motoristas', 'Categoria CNH inválida', COUNT(*) FROM {CATALOG}.{SCHEMA}.motoristas WHERE categoria_cnh NOT IN ('C','D','E') OR categoria_cnh IS NULL
+    UNION ALL SELECT 'Motoristas', 'Email inválido', COUNT(*) FROM {CATALOG}.{SCHEMA}.motoristas WHERE email NOT LIKE '%@%%' OR email IS NULL
+    UNION ALL SELECT 'Embarcadores', 'CNPJ inválido', COUNT(*) FROM {CATALOG}.{SCHEMA}.embarcadores WHERE LENGTH(TRIM(cnpj)) != 14
+    UNION ALL SELECT 'Embarcadores', 'Nome vazio', COUNT(*) FROM {CATALOG}.{SCHEMA}.embarcadores WHERE TRIM(COALESCE(nome, '')) = ''
+    UNION ALL SELECT 'Embarcadores', 'UF inexistente', COUNT(*) FROM {CATALOG}.{SCHEMA}.embarcadores WHERE estado NOT IN ('AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO')
+    UNION ALL SELECT 'Embarcadores', 'Email inválido', COUNT(*) FROM {CATALOG}.{SCHEMA}.embarcadores WHERE email NOT LIKE '%@%%' OR email IS NULL
+    UNION ALL SELECT 'Cargas', 'FK embarcador órfã', COUNT(*) FROM {CATALOG}.{SCHEMA}.cargas c WHERE NOT EXISTS (SELECT 1 FROM {CATALOG}.{SCHEMA}.embarcadores e WHERE e.id = c.embarcador_id)
+    UNION ALL SELECT 'Cargas', 'Realizada sem data entrega', COUNT(*) FROM {CATALOG}.{SCHEMA}.cargas WHERE status = 'realizada' AND data_entrega IS NULL
+    UNION ALL SELECT 'Cargas', 'Data entrega antes da coleta', COUNT(*) FROM {CATALOG}.{SCHEMA}.cargas WHERE data_prevista_entrega < data_prevista_coleta
+    UNION ALL SELECT 'Cargas', 'Peso inválido', COUNT(*) FROM {CATALOG}.{SCHEMA}.cargas WHERE peso_kg IS NULL OR peso_kg <= 0
+    UNION ALL SELECT 'Cargas', 'Valor frete inválido', COUNT(*) FROM {CATALOG}.{SCHEMA}.cargas WHERE valor_frete IS NULL OR valor_frete < 0
+    UNION ALL SELECT 'Cargas', 'Origem = destino', COUNT(*) FROM {CATALOG}.{SCHEMA}.cargas WHERE origem_estado = destino_estado AND origem_cidade = destino_cidade
   """)
 )
 

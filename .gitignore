@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+ENV/
+.eggs/
+*.egg-info/
+*.egg
+dist/
+build/
+
+# Jupyter / notebooks
+.ipynb_checkpoints/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.local
+
+# Databricks (evitar commit de config com token)
+.databrickscfg
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs and coverage
+*.log
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Optional: pastas de agentes/plugins (descomente se não quiser versionar)
+.cursor/
+.agents/
+.ai-dev-kit/
+.claude/
+.codex/
+.gemini/
+.vscode/

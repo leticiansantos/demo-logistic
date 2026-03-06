@@ -1,0 +1,149 @@
+{
+  "datasets": [
+    {
+      "name": "kpis",
+      "displayName": "KPIs Resumo",
+      "queryLines": [
+        "SELECT ",
+        "(SELECT COUNT(*) FROM leticia_santos_classic_stable_catalog.motz_demo.transportadoras) AS transportadoras, ",
+        "(SELECT COUNT(*) FROM leticia_santos_classic_stable_catalog.motz_demo.motoristas) AS motoristas, ",
+        "(SELECT COUNT(*) FROM leticia_santos_classic_stable_catalog.motz_demo.embarcadores) AS embarcadores, ",
+        "(SELECT COUNT(*) FROM leticia_santos_classic_stable_catalog.motz_demo.cargas) AS total_cargas, ",
+        "(SELECT COUNT(*) FROM leticia_santos_classic_stable_catalog.motz_demo.cargas WHERE status = 'realizada') AS cargas_realizadas, ",
+        "(SELECT ROUND(COALESCE(SUM(valor_frete), 0), 2) FROM leticia_santos_classic_stable_catalog.motz_demo.cargas WHERE status = 'realizada') AS valor_total_fretes_R "
+      ]
+    },
+    {
+      "name": "por_status",
+      "displayName": "Cargas por status",
+      "queryLines": [
+        "SELECT status AS status_carga, COUNT(*) AS quantidade ",
+        "FROM leticia_santos_classic_stable_catalog.motz_demo.cargas ",
+        "GROUP BY status ORDER BY quantidade DESC "
+      ]
+    },
+    {
+      "name": "por_tipo_carga",
+      "displayName": "Top tipos de carga",
+      "queryLines": [
+        "SELECT tipo_carga, COUNT(*) AS quantidade, ROUND(SUM(valor_frete), 2) AS valor_total ",
+        "FROM leticia_santos_classic_stable_catalog.motz_demo.cargas ",
+        "GROUP BY tipo_carga ORDER BY quantidade DESC LIMIT 10 "
+      ]
+    },
+    {
+      "name": "por_composicao",
+      "displayName": "Cargas por composição",
+      "queryLines": [
+        "SELECT composicao_veiculo, COUNT(*) AS quantidade ",
+        "FROM leticia_santos_classic_stable_catalog.motz_demo.cargas ",
+        "GROUP BY composicao_veiculo ORDER BY quantidade DESC "
+      ]
+    },
+    {
+      "name": "por_uf_origem",
+      "displayName": "Cargas por UF origem",
+      "queryLines": [
+        "SELECT COALESCE(origem_estado, 'N/A') AS estado, COUNT(*) AS quantidade ",
+        "FROM leticia_santos_classic_stable_catalog.motz_demo.cargas ",
+        "GROUP BY origem_estado ORDER BY quantidade DESC LIMIT 10 "
+      ]
+    },
+    {
+      "name": "por_uf_destino",
+      "displayName": "Cargas por UF destino",
+      "queryLines": [
+        "SELECT COALESCE(destino_estado, 'N/A') AS estado, COUNT(*) AS quantidade ",
+        "FROM leticia_santos_classic_stable_catalog.motz_demo.cargas ",
+        "GROUP BY destino_estado ORDER BY quantidade DESC LIMIT 10 "
+      ]
+    },
+    {
+      "name": "por_mes",
+      "displayName": "Cargas por mês",
+      "queryLines": [
+        "SELECT date_format(data_entrega, 'yyyy-MM') AS ano_mes, COUNT(*) AS realizadas, ROUND(SUM(valor_frete), 2) AS valor_total ",
+        "FROM leticia_santos_classic_stable_catalog.motz_demo.cargas ",
+        "WHERE status = 'realizada' AND data_entrega IS NOT NULL ",
+        "GROUP BY date_format(data_entrega, 'yyyy-MM') ORDER BY ano_mes "
+      ]
+    },
+    {
+      "name": "ticket_medio",
+      "displayName": "Ticket médio por tipo",
+      "queryLines": [
+        "SELECT tipo_carga, COUNT(*) AS quantidade, ROUND(AVG(valor_frete), 2) AS ticket_medio_R, ROUND(SUM(valor_frete), 2) AS valor_total_R ",
+        "FROM leticia_santos_classic_stable_catalog.motz_demo.cargas ",
+        "WHERE status = 'realizada' AND data_entrega IS NOT NULL GROUP BY tipo_carga ORDER BY valor_total_R DESC LIMIT 10 "
+      ]
+    },
+    {
+      "name": "data_quality",
+      "displayName": "Data Quality",
+      "queryLines": [
+        "SELECT 'Transportadoras' AS tabela, COUNT(*) AS registros_com_problema FROM leticia_santos_classic_stable_catalog.motz_demo.transportadoras ",
+        "WHERE LENGTH(TRIM(cnpj)) != 14 OR TRIM(COALESCE(nome, '')) = '' OR email NOT LIKE '%@%' OR email IS NULL OR estado NOT IN ('AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO') OR data_cadastro > current_date() ",
+        "UNION ALL SELECT 'Motoristas', COUNT(*) FROM leticia_santos_classic_stable_catalog.motz_demo.motoristas m ",
+        "WHERE LENGTH(TRIM(m.cpf)) != 11 OR NOT EXISTS (SELECT 1 FROM leticia_santos_classic_stable_catalog.motz_demo.transportadoras t WHERE t.id = m.transportadora_id) OR m.categoria_cnh NOT IN ('C','D','E') OR m.categoria_cnh IS NULL OR m.email NOT LIKE '%@%' OR m.email IS NULL ",
+        "UNION ALL SELECT 'Embarcadores', COUNT(*) FROM leticia_santos_classic_stable_catalog.motz_demo.embarcadores ",
+        "WHERE LENGTH(TRIM(cnpj)) != 14 OR TRIM(COALESCE(nome, '')) = '' OR email NOT LIKE '%@%' OR email IS NULL OR estado NOT IN ('AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO') ",
+        "UNION ALL SELECT 'Cargas', COUNT(*) FROM leticia_santos_classic_stable_catalog.motz_demo.cargas c ",
+        "WHERE NOT EXISTS (SELECT 1 FROM leticia_santos_classic_stable_catalog.motz_demo.embarcadores e WHERE e.id = c.embarcador_id) OR (status = 'realizada' AND data_entrega IS NULL) OR data_prevista_entrega < data_prevista_coleta OR peso_kg IS NULL OR peso_kg <= 0 OR valor_frete IS NULL OR valor_frete < 0 OR (origem_estado = destino_estado AND origem_cidade = destino_cidade) "
+      ]
+    },
+    {
+      "name": "data_quality_regras",
+      "displayName": "Data Quality por regra",
+      "queryLines": [
+        "SELECT 'Transportadoras' AS tabela, 'CNPJ inválido' AS regra, COUNT(*) AS registros_com_problema FROM leticia_santos_classic_stable_catalog.motz_demo.transportadoras WHERE LENGTH(TRIM(cnpj)) != 14 ",
+        "UNION ALL SELECT 'Transportadoras', 'Nome vazio', COUNT(*) FROM leticia_santos_classic_stable_catalog.motz_demo.transportadoras WHERE TRIM(COALESCE(nome, '')) = '' ",
+        "UNION ALL SELECT 'Transportadoras', 'Email inválido', COUNT(*) FROM leticia_santos_classic_stable_catalog.motz_demo.transportadoras WHERE email NOT LIKE '%@%' OR email IS NULL ",
+        "UNION ALL SELECT 'Transportadoras', 'UF inexistente', COUNT(*) FROM leticia_santos_classic_stable_catalog.motz_demo.transportadoras WHERE estado NOT IN ('AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO') ",
+        "UNION ALL SELECT 'Transportadoras', 'Data cadastro no futuro', COUNT(*) FROM leticia_santos_classic_stable_catalog.motz_demo.transportadoras WHERE data_cadastro > current_date() ",
+        "UNION ALL SELECT 'Motoristas', 'CPF inválido', COUNT(*) FROM leticia_santos_classic_stable_catalog.motz_demo.motoristas WHERE LENGTH(TRIM(cpf)) != 11 ",
+        "UNION ALL SELECT 'Motoristas', 'FK transportadora órfã', COUNT(*) FROM leticia_santos_classic_stable_catalog.motz_demo.motoristas m WHERE NOT EXISTS (SELECT 1 FROM leticia_santos_classic_stable_catalog.motz_demo.transportadoras t WHERE t.id = m.transportadora_id) ",
+        "UNION ALL SELECT 'Motoristas', 'Categoria CNH inválida', COUNT(*) FROM leticia_santos_classic_stable_catalog.motz_demo.motoristas WHERE categoria_cnh NOT IN ('C','D','E') OR categoria_cnh IS NULL ",
+        "UNION ALL SELECT 'Motoristas', 'Email inválido', COUNT(*) FROM leticia_santos_classic_stable_catalog.motz_demo.motoristas WHERE email NOT LIKE '%@%' OR email IS NULL ",
+        "UNION ALL SELECT 'Embarcadores', 'CNPJ inválido', COUNT(*) FROM leticia_santos_classic_stable_catalog.motz_demo.embarcadores WHERE LENGTH(TRIM(cnpj)) != 14 ",
+        "UNION ALL SELECT 'Embarcadores', 'Nome vazio', COUNT(*) FROM leticia_santos_classic_stable_catalog.motz_demo.embarcadores WHERE TRIM(COALESCE(nome, '')) = '' ",
+        "UNION ALL SELECT 'Embarcadores', 'UF inexistente', COUNT(*) FROM leticia_santos_classic_stable_catalog.motz_demo.embarcadores WHERE estado NOT IN ('AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO') ",
+        "UNION ALL SELECT 'Embarcadores', 'Email inválido', COUNT(*) FROM leticia_santos_classic_stable_catalog.motz_demo.embarcadores WHERE email NOT LIKE '%@%' OR email IS NULL ",
+        "UNION ALL SELECT 'Cargas', 'FK embarcador órfã', COUNT(*) FROM leticia_santos_classic_stable_catalog.motz_demo.cargas c WHERE NOT EXISTS (SELECT 1 FROM leticia_santos_classic_stable_catalog.motz_demo.embarcadores e WHERE e.id = c.embarcador_id) ",
+        "UNION ALL SELECT 'Cargas', 'Realizada sem data entrega', COUNT(*) FROM leticia_santos_classic_stable_catalog.motz_demo.cargas WHERE status = 'realizada' AND data_entrega IS NULL ",
+        "UNION ALL SELECT 'Cargas', 'Data entrega antes da coleta', COUNT(*) FROM leticia_santos_classic_stable_catalog.motz_demo.cargas WHERE data_prevista_entrega < data_prevista_coleta ",
+        "UNION ALL SELECT 'Cargas', 'Peso inválido', COUNT(*) FROM leticia_santos_classic_stable_catalog.motz_demo.cargas WHERE peso_kg IS NULL OR peso_kg <= 0 ",
+        "UNION ALL SELECT 'Cargas', 'Valor frete inválido', COUNT(*) FROM leticia_santos_classic_stable_catalog.motz_demo.cargas WHERE valor_frete IS NULL OR valor_frete < 0 ",
+        "UNION ALL SELECT 'Cargas', 'Origem = destino', COUNT(*) FROM leticia_santos_classic_stable_catalog.motz_demo.cargas WHERE origem_estado = destino_estado AND origem_cidade = destino_cidade "
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "overview",
+      "displayName": "Dashboard de Negócios – Motz Demo",
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layout": [
+        {"widget": {"name": "title", "multilineTextboxSpec": {"lines": ["## Dashboard de Negócios – Motz Demo"]}}, "position": {"x": 0, "y": 0, "width": 6, "height": 1}},
+        {"widget": {"name": "subtitle", "multilineTextboxSpec": {"lines": ["KPIs, cargas por status, tipo, UF e tendência mensal"]}}, "position": {"x": 0, "y": 1, "width": 6, "height": 1}},
+        {"widget": {"name": "kpi-transportadoras", "queries": [{"name": "main_query", "query": {"datasetName": "kpis", "fields": [{"name": "transportadoras", "expression": "`transportadoras`"}], "disaggregated": true}}], "spec": {"version": 2, "widgetType": "counter", "encodings": {"value": {"fieldName": "transportadoras", "displayName": "Transportadoras"}}, "frame": {"showTitle": true, "title": "Transportadoras"}}}, "position": {"x": 0, "y": 2, "width": 2, "height": 3}},
+        {"widget": {"name": "kpi-motoristas", "queries": [{"name": "main_query", "query": {"datasetName": "kpis", "fields": [{"name": "motoristas", "expression": "`motoristas`"}], "disaggregated": true}}], "spec": {"version": 2, "widgetType": "counter", "encodings": {"value": {"fieldName": "motoristas", "displayName": "Motoristas"}}, "frame": {"showTitle": true, "title": "Motoristas"}}}, "position": {"x": 2, "y": 2, "width": 2, "height": 3}},
+        {"widget": {"name": "kpi-embarcadores", "queries": [{"name": "main_query", "query": {"datasetName": "kpis", "fields": [{"name": "embarcadores", "expression": "`embarcadores`"}], "disaggregated": true}}], "spec": {"version": 2, "widgetType": "counter", "encodings": {"value": {"fieldName": "embarcadores", "displayName": "Embarcadores"}}, "frame": {"showTitle": true, "title": "Embarcadores"}}}, "position": {"x": 4, "y": 2, "width": 2, "height": 3}},
+        {"widget": {"name": "kpi-total-cargas", "queries": [{"name": "main_query", "query": {"datasetName": "kpis", "fields": [{"name": "total_cargas", "expression": "`total_cargas`"}], "disaggregated": true}}], "spec": {"version": 2, "widgetType": "counter", "encodings": {"value": {"fieldName": "total_cargas", "displayName": "Total Cargas"}}, "frame": {"showTitle": true, "title": "Total Cargas"}}}, "position": {"x": 0, "y": 5, "width": 2, "height": 3}},
+        {"widget": {"name": "kpi-realizadas", "queries": [{"name": "main_query", "query": {"datasetName": "kpis", "fields": [{"name": "cargas_realizadas", "expression": "`cargas_realizadas`"}], "disaggregated": true}}], "spec": {"version": 2, "widgetType": "counter", "encodings": {"value": {"fieldName": "cargas_realizadas", "displayName": "Cargas Realizadas"}}, "frame": {"showTitle": true, "title": "Cargas Realizadas"}}}, "position": {"x": 2, "y": 5, "width": 2, "height": 3}},
+        {"widget": {"name": "kpi-valor-fretes", "queries": [{"name": "main_query", "query": {"datasetName": "kpis", "fields": [{"name": "valor_total_fretes_R", "expression": "`valor_total_fretes_R`"}], "disaggregated": true}}], "spec": {"version": 2, "widgetType": "counter", "encodings": {"value": {"fieldName": "valor_total_fretes_R", "displayName": "Valor Fretes (R$)"}}, "frame": {"showTitle": true, "title": "Valor Total Fretes"}}}, "position": {"x": 4, "y": 5, "width": 2, "height": 3}},
+        {"widget": {"name": "section-status", "multilineTextboxSpec": {"lines": ["### Cargas por status e tipo"]}}, "position": {"x": 0, "y": 8, "width": 6, "height": 1}},
+        {"widget": {"name": "pie-status", "queries": [{"name": "main_query", "query": {"datasetName": "por_status", "fields": [{"name": "status_carga", "expression": "`status_carga`"}, {"name": "sum(quantidade)", "expression": "SUM(`quantidade`)"}], "disaggregated": false}}], "spec": {"version": 3, "widgetType": "pie", "encodings": {"angle": {"fieldName": "sum(quantidade)", "scale": {"type": "quantitative"}}, "color": {"fieldName": "status_carga", "scale": {"type": "categorical"}, "displayName": "Status"}}, "frame": {"showTitle": true, "title": "Cargas por status"}}}, "position": {"x": 0, "y": 9, "width": 3, "height": 5}},
+        {"widget": {"name": "bar-tipo-carga", "queries": [{"name": "main_query", "query": {"datasetName": "por_tipo_carga", "fields": [{"name": "tipo_carga", "expression": "`tipo_carga`"}, {"name": "sum(quantidade)", "expression": "SUM(`quantidade`)"}], "disaggregated": false}}], "spec": {"version": 3, "widgetType": "bar", "encodings": {"x": {"fieldName": "sum(quantidade)", "scale": {"type": "quantitative"}, "displayName": "Quantidade"}, "y": {"fieldName": "tipo_carga", "scale": {"type": "categorical"}, "displayName": "Tipo de carga"}}, "frame": {"showTitle": true, "title": "Top 10 tipos de carga"}}}, "position": {"x": 3, "y": 9, "width": 3, "height": 5}},
+        {"widget": {"name": "section-uf", "multilineTextboxSpec": {"lines": ["### Cargas por UF origem e destino"]}}, "position": {"x": 0, "y": 14, "width": 6, "height": 1}},
+        {"widget": {"name": "bar-uf-origem", "queries": [{"name": "main_query", "query": {"datasetName": "por_uf_origem", "fields": [{"name": "estado", "expression": "`estado`"}, {"name": "sum(quantidade)", "expression": "SUM(`quantidade`)"}], "disaggregated": false}}], "spec": {"version": 3, "widgetType": "bar", "encodings": {"x": {"fieldName": "estado", "scale": {"type": "categorical"}, "displayName": "UF"}, "y": {"fieldName": "sum(quantidade)", "scale": {"type": "quantitative"}, "displayName": "Quantidade"}}, "frame": {"showTitle": true, "title": "Cargas por UF origem"}}}, "position": {"x": 0, "y": 15, "width": 3, "height": 5}},
+        {"widget": {"name": "bar-uf-destino", "queries": [{"name": "main_query", "query": {"datasetName": "por_uf_destino", "fields": [{"name": "estado", "expression": "`estado`"}, {"name": "sum(quantidade)", "expression": "SUM(`quantidade`)"}], "disaggregated": false}}], "spec": {"version": 3, "widgetType": "bar", "encodings": {"x": {"fieldName": "estado", "scale": {"type": "categorical"}, "displayName": "UF"}, "y": {"fieldName": "sum(quantidade)", "scale": {"type": "quantitative"}, "displayName": "Quantidade"}}, "frame": {"showTitle": true, "title": "Cargas por UF destino"}}}, "position": {"x": 3, "y": 15, "width": 3, "height": 5}},
+        {"widget": {"name": "section-mes", "multilineTextboxSpec": {"lines": ["### Cargas realizadas por mês"]}}, "position": {"x": 0, "y": 20, "width": 6, "height": 1}},
+        {"widget": {"name": "line-por-mes", "queries": [{"name": "main_query", "query": {"datasetName": "por_mes", "fields": [{"name": "ano_mes", "expression": "`ano_mes`"}, {"name": "sum(realizadas)", "expression": "SUM(`realizadas`)"}], "disaggregated": false}}], "spec": {"version": 3, "widgetType": "line", "encodings": {"x": {"fieldName": "ano_mes", "scale": {"type": "temporal"}, "displayName": "Mês"}, "y": {"fieldName": "sum(realizadas)", "scale": {"type": "quantitative"}, "displayName": "Cargas realizadas"}}, "frame": {"showTitle": true, "title": "Realizadas por mês"}}}, "position": {"x": 0, "y": 21, "width": 6, "height": 5}},
+        {"widget": {"name": "section-detalhes", "multilineTextboxSpec": {"lines": ["### Ticket médio e Data Quality"]}}, "position": {"x": 0, "y": 26, "width": 6, "height": 1}},
+        {"widget": {"name": "table-ticket", "queries": [{"name": "main_query", "query": {"datasetName": "ticket_medio", "fields": [{"name": "tipo_carga", "expression": "`tipo_carga`"}, {"name": "sum(quantidade)", "expression": "SUM(`quantidade`)"}, {"name": "avg(ticket_medio_R)", "expression": "AVG(`ticket_medio_R`)"}, {"name": "sum(valor_total_R)", "expression": "SUM(`valor_total_R`)"}], "disaggregated": false}}], "spec": {"version": 2, "widgetType": "table", "encodings": {"columns": [{"fieldName": "tipo_carga", "displayName": "Tipo"}, {"fieldName": "sum(quantidade)", "displayName": "Qtd"}, {"fieldName": "avg(ticket_medio_R)", "displayName": "Ticket médio (R$)"}, {"fieldName": "sum(valor_total_R)", "displayName": "Valor total (R$)"}]}, "frame": {"showTitle": true, "title": "Ticket médio por tipo"}}}, "position": {"x": 0, "y": 27, "width": 6, "height": 5}},
+        {"widget": {"name": "table-dq", "queries": [{"name": "main_query", "query": {"datasetName": "data_quality", "fields": [{"name": "tabela", "expression": "`tabela`"}, {"name": "registros_com_problema", "expression": "`registros_com_problema`"}], "disaggregated": true}}], "spec": {"version": 2, "widgetType": "table", "encodings": {"columns": [{"fieldName": "tabela", "displayName": "Tabela"}, {"fieldName": "registros_com_problema", "displayName": "Registros com problema"}]}, "frame": {"showTitle": true, "title": "Data Quality (resumo por tabela)"}}}, "position": {"x": 0, "y": 32, "width": 6, "height": 3}},
+        {"widget": {"name": "table-dq-regras", "queries": [{"name": "main_query", "query": {"datasetName": "data_quality_regras", "fields": [{"name": "tabela", "expression": "`tabela`"}, {"name": "regra", "expression": "`regra`"}, {"name": "registros_com_problema", "expression": "`registros_com_problema`"}], "disaggregated": true}}], "spec": {"version": 2, "widgetType": "table", "encodings": {"columns": [{"fieldName": "tabela", "displayName": "Tabela"}, {"fieldName": "regra", "displayName": "Regra"}, {"fieldName": "registros_com_problema", "displayName": "Qtd"}]}, "frame": {"showTitle": true, "title": "Data Quality por regra"}}}, "position": {"x": 0, "y": 35, "width": 6, "height": 6}}
+      ]
+    }
+  ]
+}

@@ -1,3 +1,9 @@
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.12
+openai>=1.40.0
+databricks-sdk>=0.30.0
+# Streamlit mantido para uso no Databricks (notebooks)
 streamlit>=1.28.0
 pandas>=2.0.0
 plotly>=5.18.0

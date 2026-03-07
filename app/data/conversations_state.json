@@ -1,0 +1,90 @@
+{
+  "conversations": {
+    "mot-001": {
+      "driver_id": "mot-001",
+      "status": "matched",
+      "messages": [
+        {
+          "role": "driver",
+          "content": "Olá! Estou em São Paulo e quero ir para Tocantins, tem carga disponível para minha carreta?",
+          "type": "text",
+          "timestamp": "18:03"
+        },
+        {
+          "role": "assistant",
+          "content": "Oi, Carlos! 👋 Encontrei **2 cargas** disponíveis para o Tocantins que combinam bem com sua carreta:\n\n---\n\n**1. Milho** 🌽\n📍 Campinas/SP → Palmas/TO\n📦 26,5t | 💰 R$ 9.200 | 📅 Coleta: 12/03/2026\n🏢 CerealBrasil Ltda\n\n---\n\n**2. Soja** 🌱\n📍 São Paulo/SP → Palmas/TO\n📦 24,0t | 💰 R$ 8.500 | 📅 Coleta: 10/03/2026\n🏢 AgroSoja Exportações\n\n---\n\nA opção **1 (Milho)** aproveita melhor sua capacidade de 27t e tem o frete mais alto. Mas a **opção 2** tem coleta mais cedo, caso prefira sair antes.\n\nQuer mais detalhes ou aceitar alguma das cargas? 🚛",
+          "type": "text",
+          "timestamp": "18:03"
+        },
+        {
+          "role": "driver",
+          "content": "Quero a carga número 1",
+          "type": "text",
+          "timestamp": "18:05"
+        },
+        {
+          "role": "assistant",
+          "content": "# Carga Aceita com Sucesso! 🎉\n\nBoa notícia, **Carlos**! A carga foi confirmada. Aqui está o resumo do seu frete:\n\n---\n\n**📦 Carga:** Milho — *CerealBrasil Ltda*\n**🚛 Veículo:** Carreta Graneleiro\n**⚖️ Peso:** 26.500 kg *(dentro da sua capacidade de 27t ✅)*\n\n---\n\n**📍 Rota:**\n> Campinas/SP → Palmas/TO\n\n**📅 Coleta:** 12/03/2026\n**📅 Entrega:** 16/03/2026\n\n---\n\n**💰 Valor do Frete: R$ 9.200,00**\n\n---\n\nFique atento ao horário de carregamento que será informado pelo embarcador. Qualquer dúvida ou imprevisto durante o percurso, é só chamar aqui no Motz! 🚀\n\nBoa viagem, Carlos! 🛣️",
+          "type": "text",
+          "timestamp": "18:05"
+        }
+      ],
+      "context": {
+        "origem_estado": "SP",
+        "destino_estado": "TO",
+        "cargas_oferecidas": [
+          {
+            "id": "carga-002",
+            "embarcador": "CerealBrasil Ltda",
+            "tipo_carga": "Milho",
+            "composicao_veiculo": "Carreta",
+            "caracteristica_veiculo": "Graneleiro",
+            "origem_cidade": "Campinas",
+            "origem_estado": "SP",
+            "destino_cidade": "Palmas",
+            "destino_estado": "TO",
+            "data_prevista_coleta": "2026-03-12",
+            "data_prevista_entrega": "2026-03-16",
+            "peso_kg": 26500,
+            "valor_frete": 9200.0,
+            "status": "disponivel"
+          },
+          {
+            "id": "carga-001",
+            "embarcador": "AgroSoja Exportações",
+            "tipo_carga": "Soja",
+            "composicao_veiculo": "Carreta",
+            "caracteristica_veiculo": "Graneleiro",
+            "origem_cidade": "São Paulo",
+            "origem_estado": "SP",
+            "destino_cidade": "Palmas",
+            "destino_estado": "TO",
+            "data_prevista_coleta": "2026-03-10",
+            "data_prevista_entrega": "2026-03-14",
+            "peso_kg": 24000,
+            "valor_frete": 8500.0,
+            "status": "disponivel"
+          }
+        ],
+        "carga_aceita": {
+          "id": "carga-002",
+          "embarcador": "CerealBrasil Ltda",
+          "tipo_carga": "Milho",
+          "composicao_veiculo": "Carreta",
+          "caracteristica_veiculo": "Graneleiro",
+          "origem_cidade": "Campinas",
+          "origem_estado": "SP",
+          "destino_cidade": "Palmas",
+          "destino_estado": "TO",
+          "data_prevista_coleta": "2026-03-12",
+          "data_prevista_entrega": "2026-03-16",
+          "peso_kg": 26500,
+          "valor_frete": 9200.0,
+          "status": "disponivel"
+        },
+        "viagem_iniciada_em": null
+      }
+    }
+  },
+  "last_updated": "2026-03-06T18:05:17.536317"
+}

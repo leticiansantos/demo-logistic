@@ -1,0 +1,77 @@
+[
+  {
+    "id": "mot-001",
+    "nome": "Carlos Mendes",
+    "telefone": "11999990001",
+    "categoria_cnh": "E",
+    "localizacao_atual": "São Paulo",
+    "localizacao_estado": "SP",
+    "veiculo": {
+      "placa": "ABC1A23",
+      "modelo": "Volvo FH 540",
+      "composicao": "Carreta",
+      "caracteristica": "Graneleiro",
+      "capacidade_kg": 27000
+    }
+  },
+  {
+    "id": "mot-002",
+    "nome": "Maria Oliveira",
+    "telefone": "21999990002",
+    "categoria_cnh": "E",
+    "localizacao_atual": "Campinas",
+    "localizacao_estado": "SP",
+    "veiculo": {
+      "placa": "XYZ2B34",
+      "modelo": "Scania R450",
+      "composicao": "Carreta",
+      "caracteristica": "Sider",
+      "capacidade_kg": 25000
+    }
+  },
+  {
+    "id": "mot-003",
+    "nome": "Pedro Santos",
+    "telefone": "31999990003",
+    "categoria_cnh": "C",
+    "localizacao_atual": "Belo Horizonte",
+    "localizacao_estado": "MG",
+    "veiculo": {
+      "placa": "MNO3C45",
+      "modelo": "Mercedes Atego 2430",
+      "composicao": "Caminhão Truck",
+      "caracteristica": "Baú",
+      "capacidade_kg": 14000
+    }
+  },
+  {
+    "id": "mot-004",
+    "nome": "Ana Costa",
+    "telefone": "41999990004",
+    "categoria_cnh": "E",
+    "localizacao_atual": "Curitiba",
+    "localizacao_estado": "PR",
+    "veiculo": {
+      "placa": "DEF4D56",
+      "modelo": "DAF XF 480",
+      "composicao": "Bitrem",
+      "caracteristica": "Graneleiro",
+      "capacidade_kg": 35000
+    }
+  },
+  {
+    "id": "mot-005",
+    "nome": "Rodrigo Lima",
+    "telefone": "51999990005",
+    "categoria_cnh": "D",
+    "localizacao_atual": "Porto Alegre",
+    "localizacao_estado": "RS",
+    "veiculo": {
+      "placa": "GHI5E67",
+      "modelo": "Iveco Tector 240E28",
+      "composicao": "Caminhão Toco",
+      "caracteristica": "Grade Baixa",
+      "capacidade_kg": 8000
+    }
+  }
+]

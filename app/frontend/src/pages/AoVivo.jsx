@@ -24,13 +24,15 @@ function getInitials(name = '') {
 }
 
 export default function AoVivo() {
-  const [drivers, setDrivers]       = useState([])
-  const [convs, setConvs]           = useState({})
-  const [autoRefresh, setAutoRefresh] = useState(true)
-  const [lastUpdated, setLastUpdated] = useState(null)
+  const [drivers, setDrivers]             = useState([])
+  const [convs, setConvs]                 = useState({})
+  const [autoRefresh, setAutoRefresh]     = useState(true)
+  const [lastUpdated, setLastUpdated]     = useState(null)
+  const [available, setAvailable]         = useState(null)
 
   useEffect(() => {
     api.get('/drivers').then(r => setDrivers(r.data))
+    api.get('/loads/available').then(r => setAvailable(r.data))
   }, [])
 
   useEffect(() => {
@@ -97,8 +99,14 @@ export default function AoVivo() {
         </label>
       </div>
 
-      {/* KPIs */}
-      <div className="grid grid-cols-5 gap-4 mb-8">
+      {/* KPIs — conversas */}
+      <div className="flex items-center gap-2 mb-3">
+        <span className="text-xs font-bold text-gray-500 uppercase tracking-widest">Conversas de hoje</span>
+        <span className="text-[11px] bg-gray-800 text-gray-400 px-2.5 py-0.5 rounded-full border border-gray-700 tabular-nums">
+          {new Date().toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' })}
+        </span>
+      </div>
+      <div className="grid grid-cols-5 gap-4 mb-6">
         <KpiCard value={kpis.ativas}  label="Conversas ativas" />
         <KpiCard value={kpis.buscando} label="Buscando carga" color="text-amber-400" />
         <KpiCard value={kpis.aceitas}  label="Carga aceita"   color="text-green-400" />
@@ -109,18 +117,71 @@ export default function AoVivo() {
         />
       </div>
 
+      {/* Cargas disponíveis */}
+      {available && (
+        <div className="bg-gray-900 border border-gray-800 rounded-2xl px-6 py-4 mb-8">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xs font-bold text-gray-500 uppercase tracking-widest">
+              Cargas disponíveis para embarque
+            </h2>
+            <span className="text-2xl font-extrabold text-motz tabular-nums">{available.totais.total}</span>
+          </div>
+
+          {/* Período */}
+          <div className="grid grid-cols-4 gap-3 mb-5">
+            {[
+              { label: 'Hoje',          value: available.totais.hoje,           color: 'text-red-400',    bar: 'bg-red-500' },
+              { label: 'Próximos 3 dias', value: available.totais.proximos_3_dias, color: 'text-amber-400',  bar: 'bg-amber-500' },
+              { label: 'Próxima semana', value: available.totais.proxima_semana,  color: 'text-yellow-400', bar: 'bg-yellow-500' },
+              { label: 'Próximo mês',   value: available.totais.proximo_mes,    color: 'text-green-400',  bar: 'bg-green-500' },
+            ].map(p => {
+              const pct = available.totais.total > 0 ? Math.round((p.value / available.totais.total) * 100) : 0
+              return (
+                <div key={p.label} className="bg-gray-800 rounded-xl px-4 py-3">
+                  <div className={`text-2xl font-extrabold tabular-nums ${p.color}`}>{p.value}</div>
+                  <div className="text-gray-500 text-[10px] uppercase tracking-widest mt-0.5 mb-2">{p.label}</div>
+                  <div className="h-1 bg-gray-700 rounded-full overflow-hidden">
+                    <div className={`h-full rounded-full ${p.bar}`} style={{ width: `${pct}%` }} />
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+
+          {/* Por tipo de carga */}
+          <div>
+            <p className="text-[10px] text-gray-600 uppercase tracking-widest mb-2">Por tipo</p>
+            <div className="flex flex-wrap gap-2">
+              {available.por_tipo.map(t => (
+                <div key={t.tipo_carga} className="flex items-center gap-2 bg-gray-800 rounded-lg px-3 py-1.5">
+                  <span className="text-white text-xs font-medium">{t.tipo_carga}</span>
+                  <span className="text-motz text-xs font-bold tabular-nums">{t.quantidade}</span>
+                  {t.proxima_coleta && (
+                    <span className="text-gray-600 text-[10px]">· {t.proxima_coleta}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-5 gap-6">
 
         {/* Driver cards — 3 cols */}
         <div className="col-span-3">
-          <h2 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-4">Status dos motoristas</h2>
+          <h2 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-4">Motoristas ativos hoje</h2>
           <div className="space-y-3">
-            {drivers.map(d => {
+            {drivers
+              .filter(d => (convs[d.id]?.status || 'idle') !== 'idle')
+              .map(d => {
               const s   = convs[d.id]?.status || 'idle'
               const cfg = STATUS[s] || STATUS.idle
               const ctx = convs[d.id]?.context || {}
               const carga = ctx.carga_aceita
-              const lastMsg = convs[d.id]?.messages?.slice(-1)[0]?.content
+              const lastMsgObj = convs[d.id]?.messages?.slice(-1)[0]
+              const lastMsg = lastMsgObj?.content
+              const lastMsgIsAudio = lastMsgObj?.type === 'audio'
               return (
                 <div key={d.id} className={`bg-gray-900 rounded-2xl p-4 border-l-4 ${cfg.border} border border-gray-800 transition-all`}>
                   <div className="flex items-center gap-3">
@@ -151,13 +212,19 @@ export default function AoVivo() {
                   )}
 
                   {lastMsg && !carga && (
-                    <p className="mt-2 text-xs text-gray-600 italic truncate">"{lastMsg}"</p>
+                    <p className="mt-2 text-xs text-gray-600 italic truncate">
+                      {lastMsgIsAudio && <span className="not-italic text-violet-500 mr-1">🎙️</span>}
+                      "{lastMsgIsAudio ? lastMsg?.replace(/^🎙️\s*/, '') : lastMsg}"
+                    </p>
                   )}
                 </div>
               )
             })}
             {drivers.length === 0 && (
               <p className="text-gray-700 text-sm text-center py-8">Carregando motoristas...</p>
+            )}
+            {drivers.length > 0 && drivers.every(d => (convs[d.id]?.status || 'idle') === 'idle') && (
+              <p className="text-gray-700 text-sm text-center py-8">Nenhum motorista ativo no momento.</p>
             )}
           </div>
         </div>
@@ -179,8 +246,15 @@ export default function AoVivo() {
                   <span className="text-gray-600 text-xs">
                     {msg.role === 'driver' ? '👤' : '🤖'} {msg.driverName}
                   </span>
+                  {msg.type === 'audio' && (
+                    <span className="text-[10px] bg-violet-900/60 text-violet-300 px-1.5 py-0.5 rounded font-medium">🎙️ áudio</span>
+                  )}
                 </div>
-                <p className="text-gray-400 text-xs leading-relaxed line-clamp-2">{msg.content}</p>
+                <p className="text-gray-400 text-xs leading-relaxed line-clamp-2">
+                  {msg.type === 'audio'
+                    ? msg.content?.replace(/^🎙️\s*/, '')
+                    : msg.content}
+                </p>
               </div>
             ))}
           </div>

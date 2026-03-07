@@ -2,6 +2,15 @@ import { useState, useEffect, useRef } from 'react'
 import { Send, Mic, MicOff, Trash2, Zap, ChevronDown } from 'lucide-react'
 import api from '../api/client'
 
+function renderMarkdown(text) {
+  if (!text) return ''
+  return text
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(?!\*)(.+?)\*(?!\*)/g, '<em>$1</em>')
+    .replace(/_(.+?)_/g, '<em>$1</em>')
+}
+
 const STATUS = {
   idle:      { label: 'Aguardando',    cls: 'bg-gray-100 text-gray-500' },
   searching: { label: 'Buscando carga', cls: 'bg-amber-100 text-amber-700' },
@@ -35,6 +44,7 @@ export default function WhatsApp() {
   const scrollContainerRef = useRef(null)
   const isAtBottomRef      = useRef(true)
   const prevSelectedIdRef  = useRef(null)
+  const isSendingRef       = useRef(false)
   const [showScrollBtn, setShowScrollBtn] = useState(false)
 
   // Load drivers once
@@ -45,9 +55,19 @@ export default function WhatsApp() {
     })
   }, [])
 
-  // Poll state
+  // Poll state — pausa enquanto uma mensagem está sendo enviada para evitar
+  // que o estado do servidor sobrescreva a mensagem otimista local.
+  // O check duplo (antes e dentro do then) garante que fetches já em voo
+  // também não sobrescrevam o estado local se o envio começou enquanto
+  // o fetch estava em andamento.
   useEffect(() => {
-    const load = () => api.get('/state').then(r => setConvs(r.data.conversations || {}))
+    const load = () => {
+      if (isSendingRef.current) return
+      api.get('/state').then(r => {
+        if (isSendingRef.current) return
+        setConvs(r.data.conversations || {})
+      })
+    }
     load()
     const id = setInterval(load, 3000)
     return () => clearInterval(id)
@@ -84,16 +104,47 @@ export default function WhatsApp() {
 
   // ── Send text ──────────────────────────────────────────────────────────────
   const sendText = async (text = message) => {
-    if (!text.trim() || !selectedId || loading) return
+    const trimmed = text.trim()
+    if (!trimmed || !selectedId || loading) return
+    setMessage('')
     setLoading(true)
+    isSendingRef.current = true
+
+    // Adiciona a mensagem do motorista imediatamente no estado local
+    const now = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+    setConvs(prev => {
+      const conv = prev[selectedId] || { messages: [], status: 'idle', context: {} }
+      return {
+        ...prev,
+        [selectedId]: {
+          ...conv,
+          messages: [...(conv.messages || []), { role: 'driver', content: trimmed, type: 'text', timestamp: now }],
+        },
+      }
+    })
     scrollToBottom()
+
     try {
-      const r = await api.post('/message', { driver_id: selectedId, message: text.trim() })
-      setConvs(prev => ({ ...prev, [selectedId]: r.data.state }))
-      setMessage('')
+      const r = await api.post('/message', { driver_id: selectedId, message: trimmed })
+      const replyTs = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+      setConvs(prev => {
+        const current = prev[selectedId] || { messages: [], status: 'idle', context: {} }
+        const dbState = r.data.state || {}
+        return {
+          ...prev,
+          [selectedId]: {
+            ...dbState,
+            messages: [
+              ...(current.messages || []),
+              { role: 'assistant', content: r.data.response, type: 'text', timestamp: replyTs },
+            ],
+          },
+        }
+      })
     } catch (e) {
       alert(e.response?.data?.detail || 'Erro ao processar mensagem.')
     } finally {
+      isSendingRef.current = false
       setLoading(false)
     }
   }
@@ -271,7 +322,7 @@ export default function WhatsApp() {
                         : 'bg-white text-gray-800 rounded-bl-sm'
                     }`}
                   >
-                    <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
+                    <p className="whitespace-pre-wrap leading-relaxed" dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }} />
                     <p className={`text-[10px] mt-1 text-right ${isDriver ? 'text-orange-400' : 'text-gray-300'}`}>
                       {msg.timestamp}
                     </p>

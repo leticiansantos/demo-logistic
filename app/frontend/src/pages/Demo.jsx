@@ -2,6 +2,16 @@ import { useState, useEffect, useRef } from 'react'
 import { Send, Mic, MicOff, Trash2, Zap, RefreshCw, ChevronDown } from 'lucide-react'
 import api from '../api/client'
 
+// Converte markdown básico (**, *, _) para HTML inline seguro (conteúdo gerado pelo bot)
+function renderMarkdown(text) {
+  if (!text) return ''
+  return text
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(?!\*)(.+?)\*(?!\*)/g, '<em>$1</em>')
+    .replace(/_(.+?)_/g, '<em>$1</em>')
+}
+
 // ── Shared constants ──────────────────────────────────────────────────────────
 
 const STATUS_WA = {
@@ -21,7 +31,6 @@ const STATUS_OPS = {
 }
 
 const SUGGESTIONS = [
-  { short: 'Buscar carga SP→TO', full: 'Olá! Estou em São Paulo e quero ir para Tocantins, tem carga disponível para minha carreta?' },
   { short: 'Aceitar carga nº 1', full: 'Quero a carga número 1' },
   { short: 'Iniciei o trajeto',  full: 'Saí para fazer a coleta, iniciei o trajeto agora' },
   { short: 'Entrega concluída',  full: 'Cheguei no destino, entrega concluída!' },
@@ -33,7 +42,7 @@ function getInitials(name = '') {
 
 // ── Left panel: WhatsApp simulator ───────────────────────────────────────────
 
-function WhatsAppPanel({ drivers, convs, setConvs }) {
+function WhatsAppPanel({ drivers, convs, setConvs, isSendingRef }) {
   const [selectedId, setSelectedId] = useState(null)
   const [message, setMessage]       = useState('')
   const [loading, setLoading]       = useState(false)
@@ -79,16 +88,46 @@ function WhatsAppPanel({ drivers, convs, setConvs }) {
   const conv   = selectedId ? (convs[selectedId] || { messages: [], status: 'idle', context: {} }) : null
 
   const sendText = async (text = message) => {
-    if (!text.trim() || !selectedId || loading) return
+    const trimmed = text.trim()
+    if (!trimmed || !selectedId || loading) return
+    setMessage('')
     setLoading(true)
+    if (isSendingRef) isSendingRef.current = true
+
+    const now = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+    setConvs(prev => {
+      const conv = prev[selectedId] || { messages: [], status: 'idle', context: {} }
+      return {
+        ...prev,
+        [selectedId]: {
+          ...conv,
+          messages: [...(conv.messages || []), { role: 'driver', content: trimmed, type: 'text', timestamp: now }],
+        },
+      }
+    })
     scrollToBottom()
+
     try {
-      const r = await api.post('/message', { driver_id: selectedId, message: text.trim() })
-      setConvs(prev => ({ ...prev, [selectedId]: r.data.state }))
-      setMessage('')
+      const r = await api.post('/message', { driver_id: selectedId, message: trimmed })
+      const replyTs = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+      setConvs(prev => {
+        const current = prev[selectedId] || { messages: [], status: 'idle', context: {} }
+        const dbState = r.data.state || {}
+        return {
+          ...prev,
+          [selectedId]: {
+            ...dbState,
+            messages: [
+              ...(current.messages || []),
+              { role: 'assistant', content: r.data.response, type: 'text', timestamp: replyTs },
+            ],
+          },
+        }
+      })
     } catch (e) {
       alert(e.response?.data?.detail || 'Erro ao processar mensagem.')
     } finally {
+      if (isSendingRef) isSendingRef.current = false
       setLoading(false)
     }
   }
@@ -111,18 +150,72 @@ function WhatsAppPanel({ drivers, convs, setConvs }) {
 
   const stopRecording = () => { mediaRecorderRef.current?.stop(); setRecording(false) }
 
+  // Converte qualquer formato de áudio para WAV (16 kHz mono PCM) via Web Audio API.
+  // O Whisper no Databricks exige áudio decodificável por librosa — WAV PCM é universalmente compatível.
+  const blobToWav = async (blob) => {
+    const arrayBuffer = await blob.arrayBuffer()
+    const audioCtx = new AudioContext({ sampleRate: 16000 })
+    const decoded = await audioCtx.decodeAudioData(arrayBuffer)
+    await audioCtx.close()
+    const pcm = decoded.getChannelData(0)
+    const numSamples = pcm.length
+    const sampleRate = 16000
+    const dataSize = numSamples * 2
+    const buf = new ArrayBuffer(44 + dataSize)
+    const v = new DataView(buf)
+    const wr = (off, s) => [...s].forEach((c, i) => v.setUint8(off + i, c.charCodeAt(0)))
+    wr(0, 'RIFF'); v.setUint32(4, 36 + dataSize, true); wr(8, 'WAVE')
+    wr(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true)
+    v.setUint32(24, sampleRate, true); v.setUint32(28, sampleRate * 2, true)
+    v.setUint16(32, 2, true); v.setUint16(34, 16, true)
+    wr(36, 'data'); v.setUint32(40, dataSize, true)
+    let off = 44
+    for (let i = 0; i < numSamples; i++) { v.setInt16(off, Math.max(-1, Math.min(1, pcm[i])) * 32767, true); off += 2 }
+    return new Blob([buf], { type: 'audio/wav' })
+  }
+
   const sendAudio = async () => {
     if (!audioBlob || !selectedId || loading) return
     setLoading(true)
+    if (isSendingRef) isSendingRef.current = true
+
+    const audioUrl = URL.createObjectURL(audioBlob)
+    const now = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+
+    // Optimistic: mostra player imediatamente
+    setConvs(prev => {
+      const current = prev[selectedId] || { messages: [], status: 'idle', context: {} }
+      return { ...prev, [selectedId]: { ...current,
+        messages: [...(current.messages || []), { role: 'driver', content: '🎙️ Áudio', type: 'audio', audioUrl, timestamp: now }],
+      }}
+    })
+
+    // Converte WebM → WAV antes de enviar (Whisper precisa de PCM)
+    let uploadBlob = audioBlob
+    try { uploadBlob = await blobToWav(audioBlob) } catch (_) { /* usa original se falhar */ }
+    setAudioBlob(null)
+
     const form = new FormData()
-    form.append('file', audioBlob, 'audio.webm')
+    form.append('file', uploadBlob, 'audio.wav')
     try {
       const r = await api.post(`/audio/${selectedId}`, form, { headers: { 'Content-Type': 'multipart/form-data' } })
-      setConvs(prev => ({ ...prev, [selectedId]: r.data.state }))
-      setAudioBlob(null)
+      const replyTs = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+      const transcript = r.data.transcript || ''
+      setConvs(prev => {
+        const current = prev[selectedId] || { messages: [], status: 'idle', context: {} }
+        const dbState = r.data.state || {}
+        // Atualiza a última mensagem de áudio com a transcrição real
+        const msgs = [...(current.messages || [])]
+        const idx = msgs.findLastIndex(m => m.type === 'audio' && m.audioUrl)
+        if (idx >= 0) msgs[idx] = { ...msgs[idx], content: `🎙️ ${transcript}` }
+        return { ...prev, [selectedId]: { ...dbState,
+          messages: [...msgs, { role: 'assistant', content: r.data.response, type: 'text', timestamp: replyTs }],
+        }}
+      })
     } catch (e) {
       alert(e.response?.data?.detail || 'Erro na transcrição de áudio.')
     } finally {
+      if (isSendingRef) isSendingRef.current = false
       setLoading(false)
     }
   }
@@ -222,10 +315,14 @@ function WhatsAppPanel({ drivers, convs, setConvs }) {
             )}
             {conv.messages?.map((msg, i) => {
               const isDriver = msg.role === 'driver'
+              const isAudio  = msg.type === 'audio' && msg.audioUrl
               return (
                 <div key={i} className={`flex ${isDriver ? 'justify-end' : 'justify-start'}`}>
                   <div className={`max-w-[80%] px-3 py-2 rounded-2xl text-xs shadow-sm ${isDriver ? 'bg-motz-bg-dark text-gray-800 rounded-br-sm' : 'bg-white text-gray-800 rounded-bl-sm'}`}>
-                    <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
+                    {isAudio && (
+                      <audio controls src={msg.audioUrl} className="w-44 h-8 mb-1" />
+                    )}
+                    <p className="whitespace-pre-wrap leading-relaxed" dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }} />
                     <p className={`text-[9px] mt-0.5 text-right ${isDriver ? 'text-orange-400' : 'text-gray-300'}`}>{msg.timestamp}</p>
                   </div>
                 </div>
@@ -322,7 +419,7 @@ function WhatsAppPanel({ drivers, convs, setConvs }) {
 
 // ── Right panel: Live operations ──────────────────────────────────────────────
 
-function OpsPanel({ drivers, convs, lastUpdated, autoRefresh, setAutoRefresh }) {
+function OpsPanel({ drivers, convs, lastUpdated, autoRefresh, setAutoRefresh, available }) {
   const convList = Object.values(convs)
   const kpis = {
     ativas:   convList.filter(c => c.status !== 'idle').length,
@@ -358,6 +455,12 @@ function OpsPanel({ drivers, convs, lastUpdated, autoRefresh, setAutoRefresh }) 
       </div>
 
       {/* KPIs */}
+      <div className="flex items-center gap-2 px-5 mb-2 flex-shrink-0">
+        <span className="text-[9px] font-bold text-gray-500 uppercase tracking-widest">Hoje</span>
+        <span className="text-[10px] bg-gray-800 text-gray-400 px-2 py-0.5 rounded-full border border-gray-700 tabular-nums">
+          {new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })}
+        </span>
+      </div>
       <div className="grid grid-cols-5 gap-2 px-5 mb-4 flex-shrink-0">
         {[
           { value: kpis.ativas,  label: 'Ativas',    color: 'text-motz' },
@@ -373,13 +476,57 @@ function OpsPanel({ drivers, convs, lastUpdated, autoRefresh, setAutoRefresh }) 
         ))}
       </div>
 
+      {/* Cargas disponíveis — compacto */}
+      {available && (
+        <div className="mx-5 mb-3 bg-gray-900 border border-gray-800 rounded-xl px-4 py-3 flex-shrink-0">
+          <div className="flex items-center gap-3 mb-2.5">
+            <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Cargas disponíveis</span>
+            <span className="text-lg font-extrabold text-motz tabular-nums">{available.totais.total}</span>
+            {available.totais.atrasadas > 0 && (
+              <span className="text-[9px] bg-red-950 text-red-400 px-1.5 py-0.5 rounded-full font-bold ml-auto">
+                {available.totais.atrasadas} atrasadas
+              </span>
+            )}
+          </div>
+          <div className="grid grid-cols-4 gap-2 mb-2.5">
+            {[
+              { label: 'Hoje',      value: available.totais.hoje,            color: 'text-red-400',    bar: 'bg-red-500' },
+              { label: '3 dias',    value: available.totais.proximos_3_dias, color: 'text-amber-400',  bar: 'bg-amber-500' },
+              { label: '7 dias',    value: available.totais.proxima_semana,  color: 'text-yellow-300', bar: 'bg-yellow-400' },
+              { label: '30 dias',   value: available.totais.proximo_mes,     color: 'text-green-400',  bar: 'bg-green-500' },
+            ].map(p => {
+              const pct = available.totais.total > 0 ? Math.round((p.value / available.totais.total) * 100) : 0
+              return (
+                <div key={p.label} className="bg-gray-800 rounded-lg px-2.5 py-2">
+                  <div className={`text-base font-extrabold tabular-nums ${p.color}`}>{p.value}</div>
+                  <div className="text-gray-600 text-[9px] uppercase tracking-widest mb-1">{p.label}</div>
+                  <div className="h-0.5 bg-gray-700 rounded-full overflow-hidden">
+                    <div className={`h-full rounded-full ${p.bar}`} style={{ width: `${pct}%` }} />
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {available.por_tipo.map(t => (
+              <span key={t.tipo_carga} className="text-[9px] bg-gray-800 text-gray-400 rounded px-2 py-0.5">
+                {t.tipo_carga} <span className="text-motz font-bold">{t.quantidade}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Body: driver cards + activity feed */}
       <div className="flex flex-1 gap-4 px-5 pb-5 min-h-0">
 
         {/* Driver cards */}
         <div className="flex-1 overflow-y-auto scrollbar-thin min-w-0 space-y-2">
-          <h3 className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2">Motoristas</h3>
-          {drivers.map(d => {
+          <h3 className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2">Motoristas ativos</h3>
+          {drivers.filter(d => (convs[d.id]?.status || 'idle') !== 'idle').length === 0 && drivers.length > 0 && (
+            <p className="text-gray-700 text-[11px] text-center py-6">Nenhum motorista ativo.</p>
+          )}
+          {drivers.filter(d => (convs[d.id]?.status || 'idle') !== 'idle').map(d => {
             const s   = convs[d.id]?.status || 'idle'
             const cfg = STATUS_OPS[s] || STATUS_OPS.idle
             const ctx = convs[d.id]?.context || {}
@@ -449,17 +596,23 @@ export default function Demo() {
   const [convs, setConvs]             = useState({})
   const [autoRefresh, setAutoRefresh] = useState(true)
   const [lastUpdated, setLastUpdated] = useState(null)
+  const [available, setAvailable]     = useState(null)
+  const isSendingRef                  = useRef(false)
 
   useEffect(() => {
     api.get('/drivers').then(r => setDrivers(r.data))
+    api.get('/loads/available').then(r => setAvailable(r.data))
   }, [])
 
   useEffect(() => {
-    const load = () =>
+    const load = () => {
+      if (isSendingRef.current) return
       api.get('/state').then(r => {
+        if (isSendingRef.current) return
         setConvs(r.data.conversations || {})
         setLastUpdated(new Date().toLocaleTimeString('pt-BR'))
       })
+    }
     load()
     if (!autoRefresh) return
     const id = setInterval(load, 3000)
@@ -470,7 +623,7 @@ export default function Demo() {
     <div className="flex h-[calc(100vh-64px)] overflow-hidden">
       {/* Left: WhatsApp */}
       <div className="w-1/2 border-r border-gray-300 flex flex-col overflow-hidden flex-shrink-0">
-        <WhatsAppPanel drivers={drivers} convs={convs} setConvs={setConvs} />
+        <WhatsAppPanel drivers={drivers} convs={convs} setConvs={setConvs} isSendingRef={isSendingRef} />
       </div>
 
       {/* Right: Ops Center */}
@@ -481,6 +634,7 @@ export default function Demo() {
           lastUpdated={lastUpdated}
           autoRefresh={autoRefresh}
           setAutoRefresh={setAutoRefresh}
+          available={available}
         />
       </div>
     </div>

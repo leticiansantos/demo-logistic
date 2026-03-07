@@ -1,49 +1,92 @@
 """
-Helper compartilhado para executar SQL no Databricks SQL Warehouse.
+Helper compartilhado para executar SQL no Lakebase (PostgreSQL gerenciado).
+Substitui a conexão via Databricks SQL Warehouse por psycopg2 direto ao Lakebase.
 """
+import json
+import subprocess
+import time
 from typing import Optional
-from databricks.sdk import WorkspaceClient
-from databricks.sdk.service.sql import StatementState, StatementParameterListItem
 
-WAREHOUSE_ID = "bb828695aaf0a968"
-SCHEMA = "leticia_santos_classic_stable_catalog.motz_demo"
+import psycopg2
+import psycopg2.extras
+
+LAKEBASE_PROJECT  = "motz-demo"
+LAKEBASE_BRANCH   = "production"
+LAKEBASE_ENDPOINT = "primary"
+LAKEBASE_HOST     = "ep-twilight-art-d1liaemf.database.us-west-2.cloud.databricks.com"
+LAKEBASE_DATABASE = "motz"
+LAKEBASE_PORT     = 5432
+
+# Schema público do Lakebase (tabelas acessadas como public.<tabela>)
+SCHEMA = "public"
+
+# Cache de credenciais OAuth — validade ~1h, renovado 60s antes do vencimento
+_cred_cache: dict = {}
 
 
-def run_sql(query: str, params: Optional[list[tuple[str, str]]] = None) -> list[dict]:
-    """Executa SQL no Databricks e retorna lista de dicts.
+def _get_credentials() -> tuple[str, str]:
+    """Retorna (email, token) para o Lakebase, com cache de ~55 minutos."""
+    now = time.time()
+    if _cred_cache.get("expires_at", 0) > now + 60:
+        return _cred_cache["email"], _cred_cache["token"]
 
-    params: lista de tuplas (nome, valor) para parâmetros nomeados (:nome).
-    Use parâmetros para valores com conteúdo arbitrário (JSON, textos do usuário)
-    para evitar problemas de escaping em string literals SQL.
-    """
-    w = WorkspaceClient()
-
-    statement_params = None
-    if params:
-        statement_params = [
-            StatementParameterListItem(name=name, value="" if value is None else str(value))
-            for name, value in params
-        ]
-
-    result = w.statement_execution.execute_statement(
-        warehouse_id=WAREHOUSE_ID,
-        statement=query,
-        parameters=statement_params,
-        wait_timeout="30s",
+    endpoint_path = (
+        f"projects/{LAKEBASE_PROJECT}/branches/{LAKEBASE_BRANCH}"
+        f"/endpoints/{LAKEBASE_ENDPOINT}"
     )
-    if result.status.state != StatementState.SUCCEEDED:
-        err = result.status.error
-        raise RuntimeError(f"SQL error: {err.message if err else result.status.state}")
+    token_out = subprocess.run(
+        ["databricks", "postgres", "generate-database-credential",
+         endpoint_path, "-p", "DEFAULT", "--output", "json"],
+        capture_output=True, text=True, check=True,
+    )
+    user_out = subprocess.run(
+        ["databricks", "current-user", "me", "-p", "DEFAULT", "--output", "json"],
+        capture_output=True, text=True, check=True,
+    )
+    token = json.loads(token_out.stdout)["token"]
+    email = json.loads(user_out.stdout)["userName"]
 
-    schema = result.manifest.schema.columns if result.manifest and result.manifest.schema else []
-    cols = [c.name for c in schema]
-    rows = result.result.data_array or [] if result.result else []
-    return [dict(zip(cols, row)) for row in rows]
+    _cred_cache["token"]      = token
+    _cred_cache["email"]      = email
+    _cred_cache["expires_at"] = now + 3300  # 55 min
+    return email, token
+
+
+def get_connection():
+    """Retorna uma conexão psycopg2 ao Lakebase."""
+    email, token = _get_credentials()
+    return psycopg2.connect(
+        host=LAKEBASE_HOST,
+        port=LAKEBASE_PORT,
+        database=LAKEBASE_DATABASE,
+        user=email,
+        password=token,
+        sslmode="require",
+    )
+
+
+def run_sql(query: str, params: Optional[dict] = None) -> list[dict]:
+    """Executa SQL no Lakebase e retorna lista de dicts.
+
+    params: dicionário com parâmetros nomeados — use %(nome)s no SQL.
+    Para valores arbitrários (JSON, texto de usuário) sempre passe via params
+    para evitar problemas de escaping e injeção.
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(query, params)
+            conn.commit()
+            if cur.description:
+                return [dict(row) for row in cur.fetchall()]
+            return []
+    finally:
+        conn.close()
 
 
 def sql_escape(value: str) -> str:
-    """Escapa string para uso seguro em literal SQL com aspas simples.
-    Use apenas para valores controlados (siglas, IDs). Para conteúdo
-    arbitrário prefira parâmetros nomeados via run_sql(..., params=[...]).
+    """Escapa string para uso em literal SQL com aspas simples.
+    Prefira parâmetros nomeados via run_sql(..., params={...}) para conteúdo
+    arbitrário; use sql_escape apenas para valores controlados (siglas, IDs).
     """
     return value.replace("'", "''")

@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from core.agent import process_message
 from core.transcriber import transcribe
 from core import state as state_mgr
-from core.db import run_sql, SCHEMA, WAREHOUSE_ID
+from core.db import run_sql, SCHEMA
 
 FRONTEND_BUILD = Path(__file__).parent.parent / "frontend" / "dist"
 
@@ -93,12 +93,9 @@ def health():
 
 @app.get("/api/backend/status")
 def backend_status():
-    """Retorna estado do SQL Warehouse e do endpoint de modelo."""
+    """Retorna estado do endpoint de modelo."""
     from databricks.sdk import WorkspaceClient
     w = WorkspaceClient()
-    wh = w.warehouses.get(id=WAREHOUSE_ID)
-    wh_state = wh.state.value if wh.state else "UNKNOWN"
-
     try:
         ep = w.serving_endpoints.get(name="databricks-claude-sonnet-4-6")
         ep_state = ep.state.ready.value if ep.state and ep.state.ready else "NOT_READY"
@@ -106,22 +103,14 @@ def backend_status():
         ep_state = "UNKNOWN"
 
     return {
-        "warehouse": {"id": WAREHOUSE_ID, "name": wh.name, "state": wh_state},
         "model_endpoint": {"name": "databricks-claude-sonnet-4-6", "state": ep_state},
-        "ready": wh_state == "RUNNING" and ep_state == "READY",
+        "ready": ep_state == "READY",
     }
 
 
 @app.post("/api/backend/start")
 def backend_start():
-    """Inicia o SQL Warehouse se não estiver rodando."""
-    from databricks.sdk import WorkspaceClient
-    w = WorkspaceClient()
-    wh = w.warehouses.get(id=WAREHOUSE_ID)
-    state = wh.state.value if wh.state else "UNKNOWN"
-    if state not in ("RUNNING", "STARTING"):
-        w.warehouses.start(id=WAREHOUSE_ID)
-    return {"ok": True, "previous_state": state}
+    return {"ok": True}
 
 
 @app.get("/api/dashboard-embed")
@@ -137,6 +126,51 @@ def dashboard_embed():
 @app.get("/api/drivers")
 def list_drivers():
     return _load_drivers()
+
+
+@app.get("/api/loads/available")
+def get_available_loads():
+    """Cargas disponíveis agrupadas por período de coleta."""
+    try:
+        rows = _run_sql(f"""
+            SELECT
+                COUNT(*)                                                                                                   AS total,
+                COUNT(CASE WHEN data_prevista_coleta = CURRENT_DATE                                          THEN 1 END) AS hoje,
+                COUNT(CASE WHEN data_prevista_coleta BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '2 days' THEN 1 END) AS proximos_3_dias,
+                COUNT(CASE WHEN data_prevista_coleta BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '6 days' THEN 1 END) AS proxima_semana,
+                COUNT(CASE WHEN data_prevista_coleta BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '29 days' THEN 1 END) AS proximo_mes,
+                COUNT(CASE WHEN data_prevista_coleta < CURRENT_DATE                                          THEN 1 END) AS atrasadas
+            FROM {SCHEMA}.cargas
+            WHERE status = 'disponivel'
+        """)
+        totais = {k: int(v or 0) for k, v in rows[0].items()} if rows else {}
+
+        por_tipo = _run_sql(f"""
+            SELECT tipo_carga, COUNT(*) AS quantidade,
+                   MIN(data_prevista_coleta) AS proxima_coleta
+            FROM {SCHEMA}.cargas
+            WHERE status = 'disponivel'
+              AND data_prevista_coleta >= CURRENT_DATE
+            GROUP BY tipo_carga
+            ORDER BY quantidade DESC
+            LIMIT 8
+        """)
+
+        return {
+            "totais": totais,
+            "por_tipo": [
+                {
+                    "tipo_carga": r["tipo_carga"],
+                    "quantidade": int(r["quantidade"]),
+                    "proxima_coleta": r["proxima_coleta"],
+                }
+                for r in por_tipo
+            ],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 def _run_sql(query: str) -> list[dict]:
@@ -159,9 +193,9 @@ def get_metrics():
                 (SELECT COUNT(*) FROM {SCHEMA}.cargas WHERE status = 'realizada')                              AS cargas_realizadas,
                 (SELECT COUNT(*) FROM {SCHEMA}.cargas WHERE status = 'disponivel')                             AS cargas_disponiveis,
                 (SELECT COUNT(*) FROM {SCHEMA}.cargas WHERE status NOT IN ('realizada','disponivel'))          AS cargas_futuras,
-                (SELECT ROUND(COALESCE(SUM(valor_frete),0),2) FROM {SCHEMA}.cargas WHERE status='realizada')  AS valor_total_fretes_realizados,
-                (SELECT ROUND(COALESCE(AVG(valor_frete),0),2) FROM {SCHEMA}.cargas WHERE status='realizada')  AS valor_medio_frete_realizado,
-                (SELECT ROUND(COALESCE(SUM(peso_kg),0),2)    FROM {SCHEMA}.cargas WHERE status='realizada')   AS peso_total_kg_realizadas
+                (SELECT ROUND(COALESCE(SUM(valor_frete),0)::numeric,2) FROM {SCHEMA}.cargas WHERE status='realizada')  AS valor_total_fretes_realizados,
+                (SELECT ROUND(COALESCE(AVG(valor_frete),0)::numeric,2) FROM {SCHEMA}.cargas WHERE status='realizada')  AS valor_medio_frete_realizado,
+                (SELECT ROUND(COALESCE(SUM(peso_kg),0)::numeric,2)    FROM {SCHEMA}.cargas WHERE status='realizada')   AS peso_total_kg_realizadas
         """)
         resumo = {k: (float(v) if v is not None else 0) for k, v in kpis_rows[0].items()} if kpis_rows else {}
 
@@ -186,16 +220,16 @@ def get_metrics():
         """)
 
         por_mes = _run_sql(f"""
-            SELECT date_format(data_entrega,'yyyy-MM') AS ano_mes, COUNT(*) AS realizadas,
-                   ROUND(SUM(valor_frete),2) AS valor_total
+            SELECT TO_CHAR(data_entrega, 'YYYY-MM') AS ano_mes, COUNT(*) AS realizadas,
+                   ROUND(SUM(valor_frete)::numeric, 2) AS valor_total
             FROM {SCHEMA}.cargas WHERE status='realizada' AND data_entrega IS NOT NULL
-            GROUP BY date_format(data_entrega,'yyyy-MM') ORDER BY ano_mes
+            GROUP BY TO_CHAR(data_entrega, 'YYYY-MM') ORDER BY ano_mes
         """)
 
         ticket_medio = _run_sql(f"""
             SELECT tipo_carga, COUNT(*) AS quantidade,
-                   ROUND(AVG(valor_frete),2) AS ticket_medio,
-                   ROUND(SUM(valor_frete),2) AS valor_total
+                   ROUND(AVG(valor_frete)::numeric,2) AS ticket_medio,
+                   ROUND(SUM(valor_frete)::numeric,2) AS valor_total
             FROM {SCHEMA}.cargas WHERE status='realizada'
             GROUP BY tipo_carga ORDER BY valor_total DESC LIMIT 10
         """)
@@ -264,11 +298,13 @@ async def send_audio_message(driver_id: str, file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    # Salva mensagem de áudio com ícone antes de processar
-    state_mgr.add_message(driver_id, "driver", f"🎙️ {transcript}", "audio")
-
     try:
-        response = process_message(transcript, driver, save_driver_msg=False)
+        response = process_message(
+            transcript, driver,
+            save_driver_msg=True,
+            stored_content=f"🎙️ {transcript}",
+            msg_type="audio",
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

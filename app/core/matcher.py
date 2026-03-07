@@ -1,5 +1,5 @@
 """
-Lógica de matching: encontra cargas disponíveis na tabela cargas do Databricks
+Lógica de matching: encontra cargas disponíveis na tabela cargas do Lakebase
 compatíveis com o caminhão e rota do motorista.
 """
 from datetime import datetime
@@ -35,25 +35,58 @@ def normalizar_estado(texto: str) -> str | None:
     return None
 
 
-def _query_loads(composicao: str, caracteristica: str, extra_filters: list[str]) -> list[dict]:
-    """Executa a query de cargas com os filtros fornecidos."""
-    base = [
-        "c.status = 'disponivel'",
-        f"c.composicao_veiculo = '{sql_escape(composicao)}'",
-        f"c.caracteristica_veiculo = '{sql_escape(caracteristica)}'",
-    ] + extra_filters
+def _query_loads(
+    composicao: str,
+    caracteristica: str,
+    capacidade_kg: float,
+    orig_sigla: str,
+    dest_sigla: str | None,
+    dest_cidade: str | None,
+    date_filter: str,
+    exclude_ids: list[str] | None = None,
+    orig_cidade: str | None = None,
+) -> list[dict]:
+    """
+    Busca cargas respeitando:
+    - Origem estrita (motorista só pode embarcar de onde está)
+    - Destino flexível: cidade exata > mesmo estado > outros destinos
+    - Capacidade: só cargas que cabem no caminhão (peso_kg <= capacidade)
+    - Data: filtro passado pelo chamador
+    Ordenação: cidade exata (3) + mesmo estado (2) > utilização de peso > valor do frete
+    """
+    state_score = (
+        f"CASE WHEN c.destino_estado = '{dest_sigla}' THEN 2 ELSE 0 END"
+        if dest_sigla else "0::int"
+    )
+    city_score = (
+        f"CASE WHEN LOWER(c.destino_cidade) = LOWER('{sql_escape(dest_cidade)}') THEN 3 ELSE 0 END"
+        if dest_cidade else "0::int"
+    )
+    dest_score = f"({state_score} + {city_score})"
+    # Utilização de capacidade: cargas que aproveitam mais o caminhão aparecem primeiro
+    weight_util = f"c.peso_kg::float / {int(capacidade_kg)}"
 
     rows = run_sql(f"""
         SELECT
             c.id, c.tipo_carga, c.composicao_veiculo, c.caracteristica_veiculo,
             c.origem_cidade, c.origem_estado, c.destino_cidade, c.destino_estado,
-            CAST(c.data_prevista_coleta AS STRING) AS data_prevista_coleta,
+            c.data_prevista_coleta::text AS data_prevista_coleta,
             c.peso_kg, c.valor_frete,
             e.nome AS embarcador
         FROM {SCHEMA}.cargas c
         LEFT JOIN {SCHEMA}.embarcadores e ON e.id = c.embarcador_id
-        WHERE {" AND ".join(base)}
-        ORDER BY c.valor_frete DESC
+        WHERE c.status = 'disponivel'
+          AND c.composicao_veiculo      = '{sql_escape(composicao)}'
+          AND c.caracteristica_veiculo  = '{sql_escape(caracteristica)}'
+          AND c.peso_kg                 <= {int(capacidade_kg)}
+          AND c.origem_estado           = '{orig_sigla}'
+          AND c.data_prevista_coleta    {date_filter}
+          {f"AND LOWER(c.origem_cidade) = LOWER('{sql_escape(orig_cidade)}')" if orig_cidade else ""}
+          {("AND c.id NOT IN (" + ",".join(f"'{sql_escape(i)}'" for i in exclude_ids) + ")") if exclude_ids else ""}
+        ORDER BY
+          {dest_score} DESC,
+          ({weight_util}) DESC,
+          c.valor_frete DESC
         LIMIT 5
     """)
     return [
@@ -75,44 +108,77 @@ def _query_loads(composicao: str, caracteristica: str, extra_filters: list[str])
     ]
 
 
-def find_loads(driver: dict, dest_estado: str, orig_estado: str = None) -> list[dict]:
+def find_loads(
+    driver: dict,
+    dest_estado: str,
+    orig_estado: str = None,
+    data_referencia: str = None,
+    dest_cidade: str = None,
+    exclude_ids: list[str] | None = None,
+    data_coleta: str = None,
+    orig_cidade: str = None,
+) -> tuple[list[dict], str]:
     """
-    Encontra cargas disponíveis compatíveis com o caminhão do motorista e rota desejada.
-    Aplica fallback progressivo: origem+destino → só destino → sem filtro de rota.
+    Encontra cargas disponíveis compatíveis com o caminhão e rota do motorista.
+
+    Retorna (loads, origem_match) onde origem_match é:
+      "cidade_exata" — encontrou cargas na cidade específica pedida
+      "estado"       — não havia na cidade; trouxe cargas de outras cidades do mesmo estado
+      "nenhuma"      — sem cargas para o estado/período
+
+    Regras:
+    - Origem: tenta cidade exata primeiro; se vazio, abre para o estado inteiro
+    - Destino flexível: cidade exata > outras cidades do mesmo estado > outros destinos
+    - Peso: nunca excede a capacidade do veículo
+    - Data: se data_coleta informada, usa exata; se data_referencia, a partir dela; senão hoje → +3d
+    - Ordenação: cidade exata (3) + mesmo estado (2) > utilização de peso > valor do frete
     """
-    composicao = driver["veiculo"]["composicao"]
+    composicao     = driver["veiculo"]["composicao"]
     caracteristica = driver["veiculo"]["caracteristica"]
+    capacidade_kg  = driver["veiculo"]["capacidade_kg"]
 
-    dest_sigla = normalizar_estado(dest_estado) if dest_estado else None
     orig_sigla = normalizar_estado(orig_estado) if orig_estado else None
+    dest_sigla = normalizar_estado(dest_estado) if dest_estado else None
 
-    # Tentativa 1: origem + destino
-    if orig_sigla and dest_sigla:
-        results = _query_loads(composicao, caracteristica, [
-            f"c.origem_estado = '{orig_sigla}'",
-            f"c.destino_estado = '{dest_sigla}'",
-        ])
+    if not orig_sigla:
+        return [], "nenhuma"
+
+    if data_coleta:
+        date_filters = [f"= DATE '{data_coleta}'"]
+    elif data_referencia:
+        date_filters = [
+            f"BETWEEN DATE '{data_referencia}' AND DATE '{data_referencia}' + INTERVAL '3 days'",
+            f"BETWEEN DATE '{data_referencia}' AND DATE '{data_referencia}' + INTERVAL '7 days'",
+        ]
+    else:
+        date_filters = [
+            "= CURRENT_DATE",
+            "BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '3 days'",
+        ]
+
+    def _buscar(cidade: str | None) -> list[dict]:
+        for date_filter in date_filters:
+            results = _query_loads(
+                composicao, caracteristica, capacidade_kg,
+                orig_sigla, dest_sigla, dest_cidade, date_filter, exclude_ids,
+                orig_cidade=cidade,
+            )
+            if results:
+                return results
+        return []
+
+    # 1ª tentativa: cidade exata (se informada)
+    if orig_cidade:
+        results = _buscar(orig_cidade)
         if results:
-            return results
+            return results, "cidade_exata"
+        # 2ª tentativa: outras cidades do mesmo estado
+        results = _buscar(None)
+        return results, "estado" if results else "nenhuma"
 
-    # Tentativa 2: só destino
-    if dest_sigla:
-        results = _query_loads(composicao, caracteristica, [
-            f"c.destino_estado = '{dest_sigla}'",
-        ])
-        if results:
-            return results
-
-    # Tentativa 3: só origem
-    if orig_sigla:
-        results = _query_loads(composicao, caracteristica, [
-            f"c.origem_estado = '{orig_sigla}'",
-        ])
-        if results:
-            return results
-
-    # Fallback: qualquer carga disponível para o tipo de veículo
-    return _query_loads(composicao, caracteristica, [])
+    # Sem cidade pedida: busca em todo o estado
+    results = _buscar(None)
+    return results, "estado" if results else "nenhuma"
 
 
 def format_loads_list(loads: list[dict]) -> str:
@@ -134,18 +200,16 @@ def format_loads_list(loads: list[dict]) -> str:
 
 
 def mark_load_accepted(carga_id: str, motorista_id: str) -> None:
-    """Marca a carga como aceita no Databricks para evitar dupla aceitação."""
-    now = datetime.now().strftime("%Y-%m-%d")
-    run_sql(f"""
-        UPDATE {SCHEMA}.cargas
-        SET status = 'aceita',
-            motorista_id = '{sql_escape(motorista_id)}'
-        WHERE id = '{sql_escape(carga_id)}'
-    """)
+    """Marca a carga como aceita no Lakebase para evitar dupla aceitação."""
+    run_sql(
+        f"UPDATE {SCHEMA}.cargas SET status = 'aceita', motorista_id = %(motorista_id)s WHERE id = %(carga_id)s",
+        {"motorista_id": motorista_id, "carga_id": carga_id},
+    )
 
 
 def get_carga_by_id(carga_id: str) -> dict | None:
     rows = run_sql(
-        f"SELECT * FROM {SCHEMA}.cargas WHERE id = '{sql_escape(carga_id)}'"
+        f"SELECT * FROM {SCHEMA}.cargas WHERE id = %(carga_id)s",
+        {"carga_id": carga_id},
     )
     return rows[0] if rows else None

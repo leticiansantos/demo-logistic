@@ -1,48 +1,54 @@
 """
-Transcrição de áudio via Databricks Model Serving.
+Transcrição de áudio via Databricks Model Serving (system.ai.whisper_large_v3).
 
-Databricks Foundation Model APIs não incluem Whisper nativamente.
-Para habilitar transcrição de áudio real, faça o deploy de um endpoint
-Whisper no seu workspace (ex: openai/whisper-large-v3 via MLflow).
+Chama o endpoint /invocations diretamente com o áudio em base64,
+no formato MLflow: {"instances": ["<base64>"]}
 
-Por enquanto, esta função levanta um erro claro com instruções.
-O simulador WhatsApp funciona 100% via entrada de texto.
+A resposta tem formato: {"predictions": ["texto transcrito"]}
 """
+import base64
+import json
+import urllib.request
+import urllib.error
 
 
-WHISPER_ENDPOINT = "whisper-large-v3"  # nome do endpoint customizado, se existir
+WHISPER_ENDPOINT = "whisper-large-v3"
 
 
 def transcribe(audio_bytes: bytes, filename: str = "audio.ogg") -> str:
-    """
-    Tenta transcrever áudio usando um endpoint Whisper no Databricks.
-    Se o endpoint não existir, orienta o usuário.
-    """
+    """Transcreve áudio usando o endpoint Whisper no Databricks Model Serving."""
     try:
         from databricks.sdk import WorkspaceClient
-        from openai import OpenAI, NotFoundError
     except ImportError as e:
-        raise RuntimeError(f"Pacote não instalado: {e}. Execute: pip install databricks-sdk openai")
+        raise RuntimeError(f"Pacote não instalado: {e}. Execute: pip install databricks-sdk")
 
     w = WorkspaceClient()
-    client = OpenAI(
-        api_key=w.config.token,
-        base_url=f"{w.config.host}/serving-endpoints",
+    host = w.config.host.rstrip("/")
+    token = w.config.token
+
+    audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
+    payload = json.dumps({"instances": [audio_b64]}).encode("utf-8")
+
+    url = f"{host}/serving-endpoints/{WHISPER_ENDPOINT}/invocations"
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
     )
 
     try:
-        transcription = client.audio.transcriptions.create(
-            model=WHISPER_ENDPOINT,
-            file=(filename, audio_bytes),
-            language="pt",
-        )
-        return transcription.text.strip()
-    except Exception as e:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+        predictions = result.get("predictions") or []
+        text = predictions[0] if predictions else ""
+        return text.strip()
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
         raise RuntimeError(
-            f"Endpoint Whisper '{WHISPER_ENDPOINT}' não encontrado ou indisponível.\n\n"
-            "Para habilitar transcrição de áudio:\n"
-            "1. Faça deploy de openai/whisper-large-v3 no Databricks Model Serving\n"
-            "2. Nomeie o endpoint como 'whisper-large-v3'\n"
-            "3. Ou use a entrada de texto no simulador (funciona sem áudio).\n\n"
-            f"Detalhe do erro: {e}"
+            f"Erro ao chamar endpoint Whisper '{WHISPER_ENDPOINT}': HTTP {e.code}\n{body}"
         )
+    except Exception as e:
+        raise RuntimeError(f"Erro ao transcrever áudio: {e}")

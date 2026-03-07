@@ -7,3 +7,6 @@ faker>=22.0.0
 
 # Deploy de dashboard (script scripts/deploy_dashboard.py)
 databricks-sdk>=0.40.0
+
+# Lakebase (PostgreSQL)
+psycopg2-binary>=2.9.0

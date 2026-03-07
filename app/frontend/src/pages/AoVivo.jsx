@@ -211,10 +211,10 @@ export default function AoVivo() {
                     </div>
                   )}
 
-                  {lastMsg && !carga && (
+                  {(lastMsg || lastMsgIsAudio) && !carga && (
                     <p className="mt-2 text-xs text-gray-600 italic truncate">
                       {lastMsgIsAudio && <span className="not-italic text-violet-500 mr-1">🎙️</span>}
-                      "{lastMsgIsAudio ? lastMsg?.replace(/^🎙️\s*/, '') : lastMsg}"
+                      "{lastMsgIsAudio ? (lastMsg || 'Áudio') : lastMsg}"
                     </p>
                   )}
                 </div>
@@ -252,7 +252,7 @@ export default function AoVivo() {
                 </div>
                 <p className="text-gray-400 text-xs leading-relaxed line-clamp-2">
                   {msg.type === 'audio'
-                    ? msg.content?.replace(/^🎙️\s*/, '')
+                    ? (msg.content || 'Áudio')
                     : msg.content}
                 </p>
               </div>

@@ -3,12 +3,17 @@ Motz Demo – FastAPI Backend
 Serve a API para o frontend React (WhatsApp simulator + Live dashboard + Dashboard).
 """
 import sys
+import uuid
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+
+AUDIO_DIR = Path("/tmp/motz_audio")
+AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 
 # Garante que app/ está no path para importar core/
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -288,13 +293,27 @@ def send_text_message(body: MessageBody):
     }
 
 
+@app.get("/api/audio/{filename}")
+def serve_audio(filename: str):
+    """Serve a persisted audio file by filename."""
+    path = AUDIO_DIR / filename
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="Arquivo de áudio não encontrado.")
+    return FileResponse(path, media_type="audio/wav")
+
+
 @app.post("/api/audio/{driver_id}")
 async def send_audio_message(driver_id: str, file: UploadFile = File(...)):
     driver = _get_driver(driver_id)
     audio_bytes = await file.read()
 
+    # Persist audio so the player works across page reloads
+    audio_filename = f"{uuid.uuid4()}.wav"
+    (AUDIO_DIR / audio_filename).write_bytes(audio_bytes)
+    audio_url = f"/api/audio/{audio_filename}"
+
     try:
-        transcript = transcribe(audio_bytes, file.filename or "audio.ogg")
+        transcript = transcribe(audio_bytes, file.filename or "audio.wav")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -302,14 +321,16 @@ async def send_audio_message(driver_id: str, file: UploadFile = File(...)):
         response = process_message(
             transcript, driver,
             save_driver_msg=True,
-            stored_content=f"🎙️ {transcript}",
+            stored_content=transcript,
             msg_type="audio",
+            audio_url=audio_url,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
     return {
         "transcript": transcript,
+        "audio_url": audio_url,
         "response": response,
         "state": state_mgr.get_conversation(driver_id),
     }

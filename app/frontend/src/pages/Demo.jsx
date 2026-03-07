@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Send, Mic, MicOff, Trash2, Zap, RefreshCw, ChevronDown } from 'lucide-react'
+import { Send, Mic, Trash2, Zap, RefreshCw, ChevronDown } from 'lucide-react'
 import api from '../api/client'
 
 // Converte markdown básico (**, *, _) para HTML inline seguro (conteúdo gerado pelo bot)
@@ -46,10 +46,13 @@ function WhatsAppPanel({ drivers, convs, setConvs, isSendingRef }) {
   const [selectedId, setSelectedId] = useState(null)
   const [message, setMessage]       = useState('')
   const [loading, setLoading]       = useState(false)
-  const [recording, setRecording]   = useState(false)
-  const [audioBlob, setAudioBlob]   = useState(null)
-  const mediaRecorderRef   = useRef(null)
-  const chunksRef          = useRef([])
+  const [recording, setRecording]     = useState(false)
+  const [audioBlob, setAudioBlob]     = useState(null)
+  const [recordingTime, setRecordingTime] = useState(0)
+  const mediaRecorderRef = useRef(null)
+  const chunksRef        = useRef([])
+  const streamRef        = useRef(null)
+  const timerRef         = useRef(null)
   const messagesEndRef     = useRef(null)
   const scrollContainerRef = useRef(null)
   const isAtBottomRef      = useRef(true)
@@ -132,23 +135,44 @@ function WhatsAppPanel({ drivers, convs, setConvs, isSendingRef }) {
     }
   }
 
+  const fmtTime = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+
   const startRecording = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       chunksRef.current = []
-      const mr = new MediaRecorder(stream)
-      mr.ondataavailable = e => chunksRef.current.push(e.data)
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      streamRef.current = stream
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm'
+      const mr = new MediaRecorder(stream, { mimeType })
+      mr.ondataavailable = e => { if (e.data.size > 0) chunksRef.current.push(e.data) }
       mr.onstop = () => {
-        setAudioBlob(new Blob(chunksRef.current, { type: 'audio/webm' }))
+        if (chunksRef.current.length > 0) setAudioBlob(new Blob(chunksRef.current, { type: mimeType }))
         stream.getTracks().forEach(t => t.stop())
+        streamRef.current = null
       }
-      mr.start()
+      mr.start(100)
       mediaRecorderRef.current = mr
       setRecording(true)
+      setRecordingTime(0)
+      timerRef.current = setInterval(() => setRecordingTime(t => t + 1), 1000)
     } catch { alert('Permissão de microfone negada.') }
   }
 
-  const stopRecording = () => { mediaRecorderRef.current?.stop(); setRecording(false) }
+  const stopRecording = () => {
+    clearInterval(timerRef.current)
+    if (mediaRecorderRef.current?.state === 'recording') mediaRecorderRef.current.stop()
+    setRecording(false)
+  }
+
+  const cancelRecording = () => {
+    clearInterval(timerRef.current)
+    chunksRef.current = []
+    if (mediaRecorderRef.current?.state === 'recording') mediaRecorderRef.current.stop()
+    streamRef.current?.getTracks().forEach(t => t.stop())
+    streamRef.current = null
+    setRecording(false)
+    setAudioBlob(null)
+  }
 
   // Converte qualquer formato de áudio para WAV (16 kHz mono PCM) via Web Audio API.
   // O Whisper no Databricks exige áudio decodificável por librosa — WAV PCM é universalmente compatível.
@@ -182,11 +206,11 @@ function WhatsAppPanel({ drivers, convs, setConvs, isSendingRef }) {
     const audioUrl = URL.createObjectURL(audioBlob)
     const now = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
 
-    // Optimistic: mostra player imediatamente
+    // Optimistic: mostra player imediatamente (content vazio = ainda transcrevendo)
     setConvs(prev => {
       const current = prev[selectedId] || { messages: [], status: 'idle', context: {} }
       return { ...prev, [selectedId]: { ...current,
-        messages: [...(current.messages || []), { role: 'driver', content: '🎙️ Áudio', type: 'audio', audioUrl, timestamp: now }],
+        messages: [...(current.messages || []), { role: 'driver', content: '', type: 'audio', audioUrl, timestamp: now }],
       }}
     })
 
@@ -199,18 +223,14 @@ function WhatsAppPanel({ drivers, convs, setConvs, isSendingRef }) {
     form.append('file', uploadBlob, 'audio.wav')
     try {
       const r = await api.post(`/audio/${selectedId}`, form, { headers: { 'Content-Type': 'multipart/form-data' } })
-      const replyTs = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
-      const transcript = r.data.transcript || ''
       setConvs(prev => {
-        const current = prev[selectedId] || { messages: [], status: 'idle', context: {} }
         const dbState = r.data.state || {}
-        // Atualiza a última mensagem de áudio com a transcrição real
-        const msgs = [...(current.messages || [])]
-        const idx = msgs.findLastIndex(m => m.type === 'audio' && m.audioUrl)
-        if (idx >= 0) msgs[idx] = { ...msgs[idx], content: `🎙️ ${transcript}` }
-        return { ...prev, [selectedId]: { ...dbState,
-          messages: [...msgs, { role: 'assistant', content: r.data.response, type: 'text', timestamp: replyTs }],
-        }}
+        // Usa o estado do DB como fonte de verdade (já contém a mensagem de áudio + resposta).
+        // Apenas restaura audioUrl a partir de audio_url para que o player funcione.
+        const messages = (dbState.messages || []).map(m =>
+          m.type === 'audio' ? { ...m, audioUrl: m.audio_url || undefined } : m
+        )
+        return { ...prev, [selectedId]: { ...dbState, messages } }
       })
     } catch (e) {
       alert(e.response?.data?.detail || 'Erro na transcrição de áudio.')
@@ -315,14 +335,21 @@ function WhatsAppPanel({ drivers, convs, setConvs, isSendingRef }) {
             )}
             {conv.messages?.map((msg, i) => {
               const isDriver = msg.role === 'driver'
-              const isAudio  = msg.type === 'audio' && msg.audioUrl
+              const audioSrc = msg.audioUrl || msg.audio_url || null
+              const isAudio  = msg.type === 'audio' && audioSrc
               return (
                 <div key={i} className={`flex ${isDriver ? 'justify-end' : 'justify-start'}`}>
                   <div className={`max-w-[80%] px-3 py-2 rounded-2xl text-xs shadow-sm ${isDriver ? 'bg-motz-bg-dark text-gray-800 rounded-br-sm' : 'bg-white text-gray-800 rounded-bl-sm'}`}>
-                    {isAudio && (
-                      <audio controls src={msg.audioUrl} className="w-44 h-8 mb-1" />
+                    {isAudio ? (
+                      <>
+                        <audio controls src={audioSrc} className="w-44 h-8 mb-1.5" />
+                        <p className={`text-[11px] leading-relaxed ${msg.content ? 'text-gray-700' : 'text-gray-400 italic'}`}>
+                          {msg.content || 'Transcrevendo…'}
+                        </p>
+                      </>
+                    ) : (
+                      <p className="whitespace-pre-wrap leading-relaxed" dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }} />
                     )}
-                    <p className="whitespace-pre-wrap leading-relaxed" dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }} />
                     <p className={`text-[9px] mt-0.5 text-right ${isDriver ? 'text-orange-400' : 'text-gray-300'}`}>{msg.timestamp}</p>
                   </div>
                 </div>
@@ -372,19 +399,62 @@ function WhatsAppPanel({ drivers, convs, setConvs, isSendingRef }) {
 
           {/* input */}
           <div className="bg-[#f0f0f0] px-3 py-2 flex items-center gap-2 border-t border-gray-200 flex-shrink-0">
-            {audioBlob ? (
-              <div className="flex items-center gap-2 flex-1 bg-white rounded-full px-3 py-1.5 text-xs">
-                <span className="text-motz text-[10px] font-medium">Áudio gravado — pronto para enviar</span>
-                <button onClick={() => setAudioBlob(null)} className="ml-auto text-gray-400 hover:text-gray-600 text-xs">✕</button>
-              </div>
+            {recording ? (
+              /* ── Gravando ── */
+              <>
+                <button onClick={cancelRecording} className="w-8 h-8 rounded-full bg-gray-300 hover:bg-gray-400 flex items-center justify-center text-gray-600 flex-shrink-0 transition-all" title="Cancelar">
+                  <span className="text-xs font-bold">✕</span>
+                </button>
+                <div className="flex-1 flex items-center gap-2 bg-white rounded-full px-3 py-1.5">
+                  <span className="relative flex h-2.5 w-2.5 flex-shrink-0">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
+                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500" />
+                  </span>
+                  <span className="text-red-500 text-[11px] font-semibold">Gravando</span>
+                  <span className="text-gray-500 text-[11px] tabular-nums ml-1">{fmtTime(recordingTime)}</span>
+                  <div className="flex items-center gap-0.5 ml-auto">
+                    {[3,5,4,6,3,5,4,3,6,5].map((h, i) => (
+                      <div
+                        key={i}
+                        className="w-0.5 bg-red-400 rounded-full"
+                        style={{ height: `${h * 2}px`, animationDelay: `${i * 80}ms`, animation: 'pulse 0.6s ease-in-out infinite alternate' }}
+                      />
+                    ))}
+                  </div>
+                </div>
+                <button onClick={stopRecording} className="w-8 h-8 bg-red-500 hover:bg-red-600 rounded-full flex items-center justify-center text-white flex-shrink-0 transition-all" title="Parar gravação">
+                  <div className="w-3 h-3 bg-white rounded-sm" />
+                </button>
+              </>
+            ) : audioBlob ? (
+              /* ── Áudio pronto para enviar ── */
+              <>
+                <button onClick={() => setAudioBlob(null)} className="w-8 h-8 rounded-full bg-gray-300 hover:bg-gray-400 flex items-center justify-center text-gray-600 flex-shrink-0 transition-all" title="Descartar">
+                  <span className="text-xs font-bold">✕</span>
+                </button>
+                <div className="flex-1 flex items-center gap-2 bg-white rounded-full px-3 py-1.5">
+                  <span className="text-[18px]">🎙️</span>
+                  <span className="text-gray-700 text-[11px] font-medium">Áudio pronto para enviar</span>
+                  <span className="text-gray-400 text-[10px] ml-auto">{fmtTime(recordingTime)}</span>
+                </div>
+                <button
+                  onClick={sendAudio}
+                  disabled={loading}
+                  className="w-8 h-8 bg-motz hover:bg-motz-dark disabled:bg-gray-300 rounded-full flex items-center justify-center text-white transition-all flex-shrink-0"
+                >
+                  {loading ? <div className="w-3 h-3 border-2 border-white/40 border-t-white rounded-full animate-spin" /> : <Send size={13} />}
+                </button>
+              </>
             ) : (
+              /* ── Normal ── */
               <>
                 <button
-                  onMouseDown={startRecording} onMouseUp={stopRecording}
-                  onTouchStart={startRecording} onTouchEnd={stopRecording}
-                  className={`w-8 h-8 rounded-full flex items-center justify-center transition-all flex-shrink-0 ${recording ? 'bg-red-500 scale-110' : 'bg-gray-200 hover:bg-gray-300 text-gray-600'}`}
+                  onClick={startRecording}
+                  disabled={loading}
+                  className="w-8 h-8 rounded-full flex items-center justify-center bg-gray-200 hover:bg-gray-300 text-gray-600 transition-all flex-shrink-0 disabled:opacity-40"
+                  title="Gravar áudio"
                 >
-                  {recording ? <MicOff size={14} className="text-white" /> : <Mic size={14} />}
+                  <Mic size={14} />
                 </button>
                 <input
                   type="text"
@@ -395,17 +465,15 @@ function WhatsAppPanel({ drivers, convs, setConvs, isSendingRef }) {
                   className="flex-1 bg-white rounded-full px-3 py-2 text-xs outline-none focus:ring-2 focus:ring-motz/30"
                   disabled={loading}
                 />
+                <button
+                  onClick={() => sendText()}
+                  disabled={loading || !message.trim()}
+                  className="w-8 h-8 bg-motz hover:bg-motz-dark disabled:bg-gray-300 rounded-full flex items-center justify-center text-white transition-all flex-shrink-0"
+                >
+                  {loading ? <div className="w-3 h-3 border-2 border-white/40 border-t-white rounded-full animate-spin" /> : <Send size={13} />}
+                </button>
               </>
             )}
-            <button
-              onClick={audioBlob ? sendAudio : () => sendText()}
-              disabled={loading || (!message.trim() && !audioBlob)}
-              className="w-8 h-8 bg-motz hover:bg-motz-dark disabled:bg-gray-300 rounded-full flex items-center justify-center text-white transition-all flex-shrink-0"
-            >
-              {loading
-                ? <div className="w-3 h-3 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-                : <Send size={13} />}
-            </button>
           </div>
         </div>
       ) : (
@@ -433,7 +501,9 @@ function OpsPanel({ drivers, convs, lastUpdated, autoRefresh, setAutoRefresh, av
 
   const feed = drivers
     .flatMap(d => (convs[d.id]?.messages || []).map(m => ({ ...m, driverName: d.nome.split(' ')[0] })))
-    .slice(-30).reverse()
+    .sort((a, b) => (a.timestamp || '').localeCompare(b.timestamp || ''))
+    .slice(-30)
+    .reverse()
 
   return (
     <div className="h-full bg-gray-950 text-white flex flex-col overflow-hidden">
@@ -579,7 +649,9 @@ function OpsPanel({ drivers, convs, lastUpdated, autoRefresh, setAutoRefresh, av
                   <span className="text-motz text-[9px] font-bold">{msg.timestamp}</span>
                   <span className="text-gray-600 text-[9px]">{msg.role === 'driver' ? '👤' : '🤖'} {msg.driverName}</span>
                 </div>
-                <p className="text-gray-400 text-[9px] leading-relaxed line-clamp-2">{msg.content}</p>
+                <p className="text-gray-400 text-[9px] leading-relaxed line-clamp-2">
+                  {msg.type === 'audio' ? (msg.content ? `🎙️ ${msg.content}` : '🎙️ Áudio') : msg.content}
+                </p>
               </div>
             ))}
           </div>
@@ -609,7 +681,26 @@ export default function Demo() {
       if (isSendingRef.current) return
       api.get('/state').then(r => {
         if (isSendingRef.current) return
-        setConvs(r.data.conversations || {})
+        const serverConvs = r.data.conversations || {}
+        // Preserva audioUrl das mensagens locais ao mergear com estado do servidor
+        // (blob URLs só existem no browser e não são persistidas no DB)
+        setConvs(prev => {
+          const merged = {}
+          for (const [dId, serverConv] of Object.entries(serverConvs)) {
+            const existing = prev[dId]
+            if (!existing?.messages?.length) { merged[dId] = serverConv; continue }
+            const audioUrls = {}
+            existing.messages.forEach(m => { if (m.audioUrl && m.timestamp) audioUrls[m.timestamp] = m.audioUrl })
+            const messages = (serverConv.messages || []).map(m => {
+              if (m.type !== 'audio') return m
+              // Prefer local blob URL (in-progress) → server persisted URL → field from DB
+              const localUrl = m.timestamp && audioUrls[m.timestamp]
+              return { ...m, audioUrl: localUrl || m.audio_url || undefined }
+            })
+            merged[dId] = { ...serverConv, messages }
+          }
+          return merged
+        })
         setLastUpdated(new Date().toLocaleTimeString('pt-BR'))
       })
     }

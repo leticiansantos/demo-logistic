@@ -186,7 +186,8 @@ Se nenhuma carga foi encontrada, explique os critérios usados e sugira alternat
 
 
 def process_message(message: str, driver: dict, save_driver_msg: bool = True,
-                    stored_content: str = None, msg_type: str = "text") -> str:
+                    stored_content: str = None, msg_type: str = "text",
+                    audio_url: str = None) -> str:
     """
     Pipeline completo: extrai intenção (com contexto) → executa lógica de estado → gera resposta.
 
@@ -392,12 +393,15 @@ def process_message(message: str, driver: dict, save_driver_msg: bool = True,
     # eliminando leituras intercaladas que retornam dados obsoletos do warehouse.
     final_messages = list(history)
     if save_driver_msg:
-        final_messages.append({
+        driver_msg = {
             "role": "driver",
             "content": stored_content if stored_content is not None else message,
             "type": msg_type,
             "timestamp": now,
-        })
+        }
+        if audio_url:
+            driver_msg["audio_url"] = audio_url
+        final_messages.append(driver_msg)
     final_messages.append({
         "role": "assistant",
         "content": response_text,

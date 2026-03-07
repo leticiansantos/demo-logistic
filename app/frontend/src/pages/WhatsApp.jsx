@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Send, Mic, MicOff, Trash2, Zap } from 'lucide-react'
+import { Send, Mic, MicOff, Trash2, Zap, ChevronDown } from 'lucide-react'
 import api from '../api/client'
 
 const STATUS = {
@@ -29,9 +29,13 @@ export default function WhatsApp() {
   const [loading, setLoading]       = useState(false)
   const [recording, setRecording]   = useState(false)
   const [audioBlob, setAudioBlob]   = useState(null)
-  const mediaRecorderRef = useRef(null)
-  const chunksRef        = useRef([])
-  const messagesEndRef   = useRef(null)
+  const mediaRecorderRef  = useRef(null)
+  const chunksRef         = useRef([])
+  const messagesEndRef    = useRef(null)
+  const scrollContainerRef = useRef(null)
+  const isAtBottomRef      = useRef(true)
+  const prevSelectedIdRef  = useRef(null)
+  const [showScrollBtn, setShowScrollBtn] = useState(false)
 
   // Load drivers once
   useEffect(() => {
@@ -49,9 +53,30 @@ export default function WhatsApp() {
     return () => clearInterval(id)
   }, [])
 
-  // Scroll to bottom on new message
+  // Track whether user is near the bottom
+  const handleScroll = () => {
+    const el = scrollContainerRef.current
+    if (!el) return
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+    isAtBottomRef.current = atBottom
+    setShowScrollBtn(!atBottom)
+  }
+
+  const scrollToBottom = (behavior = 'smooth') => {
+    messagesEndRef.current?.scrollIntoView({ behavior })
+    isAtBottomRef.current = true
+    setShowScrollBtn(false)
+  }
+
+  // Scroll to bottom only when switching driver (always) or when already at bottom
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    const switched = prevSelectedIdRef.current !== selectedId
+    prevSelectedIdRef.current = selectedId
+    if (switched) {
+      scrollToBottom('instant')
+    } else if (isAtBottomRef.current) {
+      scrollToBottom('smooth')
+    }
   }, [convs, selectedId])
 
   const driver = drivers.find(d => d.id === selectedId)
@@ -61,6 +86,7 @@ export default function WhatsApp() {
   const sendText = async (text = message) => {
     if (!text.trim() || !selectedId || loading) return
     setLoading(true)
+    scrollToBottom()
     try {
       const r = await api.post('/message', { driver_id: selectedId, message: text.trim() })
       setConvs(prev => ({ ...prev, [selectedId]: r.data.state }))
@@ -178,7 +204,7 @@ export default function WhatsApp() {
 
       {/* ── Right: chat ──────────────────────────────────────────────────── */}
       {driver && conv ? (
-        <div className="flex-1 flex flex-col min-w-0">
+        <div className="flex-1 flex flex-col min-w-0 relative">
 
           {/* chat header */}
           <div className="bg-motz px-5 py-3 flex items-center gap-3 shadow-sm">
@@ -216,6 +242,8 @@ export default function WhatsApp() {
 
           {/* messages area */}
           <div
+            ref={scrollContainerRef}
+            onScroll={handleScroll}
             className="flex-1 overflow-y-auto px-8 py-5 flex flex-col gap-2 scrollbar-thin"
             style={{
               backgroundImage:
@@ -266,6 +294,17 @@ export default function WhatsApp() {
 
             <div ref={messagesEndRef} />
           </div>
+
+          {/* scroll-to-bottom button */}
+          {showScrollBtn && (
+            <button
+              onClick={() => scrollToBottom()}
+              className="absolute bottom-24 right-6 w-9 h-9 bg-white rounded-full shadow-lg border border-gray-200 flex items-center justify-center text-gray-500 hover:text-motz hover:border-motz transition-all z-10"
+              title="Ir para as mensagens mais recentes"
+            >
+              <ChevronDown size={18} />
+            </button>
+          )}
 
           {/* quick suggestions */}
           <div className="bg-white border-t border-gray-100 px-4 py-2 flex gap-2 overflow-x-auto scrollbar-thin">

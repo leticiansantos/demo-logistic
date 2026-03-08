@@ -3,7 +3,6 @@ Helper compartilhado para executar SQL no Lakebase (PostgreSQL gerenciado).
 Substitui a conexão via Databricks SQL Warehouse por psycopg2 direto ao Lakebase.
 """
 import json
-import subprocess
 import time
 from typing import Optional
 
@@ -30,25 +29,33 @@ def _get_credentials() -> tuple[str, str]:
     if _cred_cache.get("expires_at", 0) > now + 60:
         return _cred_cache["email"], _cred_cache["token"]
 
+    from databricks.sdk import WorkspaceClient
+    from datetime import datetime, timezone
+    w = WorkspaceClient()
+
     endpoint_path = (
         f"projects/{LAKEBASE_PROJECT}/branches/{LAKEBASE_BRANCH}"
         f"/endpoints/{LAKEBASE_ENDPOINT}"
     )
-    token_out = subprocess.run(
-        ["databricks", "postgres", "generate-database-credential",
-         endpoint_path, "-p", "DEFAULT", "--output", "json"],
-        capture_output=True, text=True, check=True,
+    result = w.api_client.do(
+        "POST",
+        "/api/2.0/postgres/credentials",
+        body={"endpoint": endpoint_path},
     )
-    user_out = subprocess.run(
-        ["databricks", "current-user", "me", "-p", "DEFAULT", "--output", "json"],
-        capture_output=True, text=True, check=True,
-    )
-    token = json.loads(token_out.stdout)["token"]
-    email = json.loads(user_out.stdout)["userName"]
+    token = result["token"]
+    email = w.current_user.me().user_name
+
+    # Usa expire_time da resposta; fallback de 55 min
+    expire_time = result.get("expire_time")
+    if expire_time:
+        dt = datetime.fromisoformat(expire_time.replace("Z", "+00:00"))
+        expires_at = dt.timestamp() - 60  # 1 min de margem
+    else:
+        expires_at = now + 3300
 
     _cred_cache["token"]      = token
     _cred_cache["email"]      = email
-    _cred_cache["expires_at"] = now + 3300  # 55 min
+    _cred_cache["expires_at"] = expires_at
     return email, token
 
 

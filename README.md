@@ -2,11 +2,19 @@
 
 Plataforma estilo "Uber de caminhões": conecta **embarcadores** (quem precisa enviar carga) e **transportadores** (motoristas/transportadoras), com um agente de IA conversacional via WhatsApp simulator.
 
-## Arquitetura
+---
 
-![Arquitetura Motz Demo](docs/architecture.svg)
+## Visão Geral (CIO)
 
-> **Stack completo:** React 18 + Vite + Tailwind CSS · FastAPI + Python 3 · Databricks (Claude Sonnet 4.6, faster-whisper large-v3, Delta Lake, DBSQL, AI/BI, Unity Catalog, MLflow)
+![Arquitetura Alto Nível](docs/architecture-cio.svg)
+
+---
+
+## Arquitetura Técnica
+
+![Arquitetura Técnica Motz Demo](docs/architecture.svg)
+
+> **Stack completo:** React 18 + Vite + Tailwind CSS · FastAPI + Python 3 · Databricks (Claude Sonnet 4.6, Whisper large-v3, Lakebase, Delta Lake, DBSQL, AI/BI, Unity Catalog, MLflow, Apps)
 
 ---
 
@@ -24,8 +32,8 @@ Plataforma estilo "Uber de caminhões": conecta **embarcadores** (quem precisa e
 |------|--------|-----------|
 | `/api/message` | POST | Processa mensagem de texto → agente LLM |
 | `/api/audio/{driver_id}` | POST | Transcreve áudio → agente LLM |
-| `/api/metrics` | GET | Métricas ao vivo do DBSQL |
-| `/api/drivers` | GET | Lista motoristas do Delta Lake |
+| `/api/metrics` | GET | Métricas ao vivo via Lakebase |
+| `/api/drivers` | GET | Lista motoristas do Lakebase |
 | `/api/state/{driver_id}` | GET | Histórico de conversa |
 | `/api/state` | DELETE | Reseta conversas |
 
@@ -33,20 +41,22 @@ Plataforma estilo "Uber de caminhões": conecta **embarcadores** (quem precisa e
 | Módulo | Responsabilidade |
 |--------|-----------------|
 | `agent.py` | Orquestrador LLM — ferramentas de consulta a cargas, motoristas e estado |
-| `transcriber.py` | Speech-to-Text via endpoint `faster-whisper-large-v3` |
+| `transcriber.py` | Speech-to-Text via endpoint `whisper-large-v3` |
 | `state.py` | Histórico de conversas (leitura/escrita na tabela `conversas`) |
-| `db.py` | Executor SQL → Databricks DBSQL |
+| `db.py` | Conexão ao Lakebase (PostgreSQL) via Databricks SDK |
 
 ### Databricks Workspace
 | Serviço | Recurso |
 |---------|---------|
+| **Databricks Apps** | `motz-demo` — hospeda React + FastAPI em produção |
 | **Model Serving** | `databricks-claude-sonnet-4-6` (LLM Agent) |
-| **Model Serving** | `faster-whisper-large-v3` (STT — MLflow code-based, CPU/int8) |
+| **Model Serving** | `whisper-large-v3` (STT — OpenAI Whisper) |
+| **Lakebase** | PostgreSQL gerenciado — project `motz-demo`, branch `production` |
 | **Unity Catalog** | `leticia_santos_classic_stable_catalog.motz_demo` |
 | **Delta Lake** | `motoristas`, `transportadoras`, `embarcadores`, `cargas`, `conversas` |
 | **SQL Warehouse** | DBSQL Serverless — queries ao vivo |
 | **AI/BI Dashboard** | Dashboard publicado com `embed_credentials` |
-| **MLflow** | Registry do modelo faster-whisper large-v3 v2 |
+| **MLflow** | Registry do modelo whisper-large-v3 |
 
 ---
 
@@ -65,6 +75,7 @@ Plataforma estilo "Uber de caminhões": conecta **embarcadores** (quem precisa e
 ## Workspace Databricks
 
 - **URL:** [fevm-leticia-santos-classic-stable.cloud.databricks.com](https://fevm-leticia-santos-classic-stable.cloud.databricks.com/)
+- **App:** [motz-demo-7474658265676932.aws.databricksapps.com](https://motz-demo-7474658265676932.aws.databricksapps.com)
 - **Org ID:** `7474658265676932`
 - **Catalog / Schema:** `leticia_santos_classic_stable_catalog.motz_demo`
 
@@ -120,21 +131,24 @@ O Vite proxeia `/api/*` → `http://localhost:8000`.
 demo-logistic/
 ├── README.md
 ├── docs/
-│   ├── architecture.svg          # Diagrama de arquitetura
+│   ├── architecture.svg              # Diagrama técnico detalhado
+│   ├── architecture-cio.svg          # Diagrama alto nível (CIO)
 │   ├── databricks-workspace.md
 │   ├── data_quality_rules.md
 │   └── storytelling_genie_motz_demo.md
 ├── app/
+│   ├── app.yaml                      # Databricks Apps config
+│   ├── start.sh                      # Entrypoint (APP_PORT)
 │   ├── backend/
-│   │   └── main.py               # FastAPI — rotas da API
+│   │   └── main.py                   # FastAPI — rotas da API
 │   ├── core/
-│   │   ├── agent.py              # Orquestrador LLM (Claude)
-│   │   ├── transcriber.py        # STT (faster-whisper)
-│   │   ├── state.py              # Histórico de conversas
-│   │   └── db.py                 # Executor SQL Databricks
+│   │   ├── agent.py                  # Orquestrador LLM (Claude)
+│   │   ├── transcriber.py            # STT (Whisper large-v3)
+│   │   ├── state.py                  # Histórico de conversas
+│   │   └── db.py                     # Lakebase via Databricks SDK
 │   ├── frontend/
 │   │   └── src/
-│   │       └── pages/Demo.jsx    # App principal React
+│   │       └── pages/Demo.jsx        # App principal React
 │   └── requirements.txt
 ├── notebooks/
 │   ├── 01_criar_tabelas_sinteticas.py

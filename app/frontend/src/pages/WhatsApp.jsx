@@ -177,14 +177,44 @@ export default function WhatsApp() {
   const sendAudio = async () => {
     if (!audioBlob || !selectedId || loading) return
     setLoading(true)
+
+    const audioUrl = URL.createObjectURL(audioBlob)
+    const now = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+
+    // Optimistic: mostra player imediatamente
+    setConvs(prev => {
+      const current = prev[selectedId] || { messages: [], status: 'idle', context: {} }
+      return { ...prev, [selectedId]: { ...current,
+        messages: [...(current.messages || []), { role: 'driver', content: '', type: 'audio', audioUrl, timestamp: now }],
+      }}
+    })
+
     const formData = new FormData()
     formData.append('file', audioBlob, 'audio.webm')
+    setAudioBlob(null)
     try {
-      const r = await api.post(`/audio/${selectedId}`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
+      // Fase 1: transcrição
+      const r1 = await api.post(`/transcribe/${selectedId}`, formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+      setConvs(prev => {
+        const current = prev[selectedId] || { messages: [], status: 'idle', context: {} }
+        const msgs = [...(current.messages || [])]
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          if (msgs[i].type === 'audio' && msgs[i].role === 'driver') {
+            msgs[i] = { ...msgs[i], content: r1.data.transcript, audioUrl: r1.data.audio_url || msgs[i].audioUrl }
+            break
+          }
+        }
+        return { ...prev, [selectedId]: { ...current, messages: msgs } }
       })
-      setConvs(prev => ({ ...prev, [selectedId]: r.data.state }))
-      setAudioBlob(null)
+
+      // Fase 2: resposta do agente
+      const r2 = await api.post(`/respond/${selectedId}`, { message: r1.data.transcript })
+      const replyTs = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+      setConvs(prev => {
+        const current = prev[selectedId] || { messages: [], status: 'idle', context: {} }
+        const msgs = [...(current.messages || []), { role: 'assistant', content: r2.data.response, type: 'text', timestamp: replyTs }]
+        return { ...prev, [selectedId]: { ...(r2.data.state || {}), messages: msgs } }
+      })
     } catch (e) {
       alert(e.response?.data?.detail || 'Erro na transcrição de áudio.')
     } finally {
@@ -313,6 +343,8 @@ export default function WhatsApp() {
 
             {conv.messages?.map((msg, i) => {
               const isDriver = msg.role === 'driver'
+              const audioSrc = msg.audioUrl || msg.audio_url || null
+              const isAudio  = msg.type === 'audio' && audioSrc
               return (
                 <div key={i} className={`flex ${isDriver ? 'justify-end' : 'justify-start'}`}>
                   <div
@@ -322,7 +354,16 @@ export default function WhatsApp() {
                         : 'bg-white text-gray-800 rounded-bl-sm'
                     }`}
                   >
-                    <p className="whitespace-pre-wrap leading-relaxed" dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }} />
+                    {isAudio ? (
+                      <>
+                        <audio controls src={audioSrc} className="w-44 h-8 mb-1.5" />
+                        <p className={`text-xs leading-relaxed ${msg.content ? 'text-gray-700' : 'text-gray-400 italic'}`}>
+                          {msg.content || 'Transcrevendo…'}
+                        </p>
+                      </>
+                    ) : (
+                      <p className="whitespace-pre-wrap leading-relaxed" dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }} />
+                    )}
                     <p className={`text-[10px] mt-1 text-right ${isDriver ? 'text-orange-400' : 'text-gray-300'}`}>
                       {msg.timestamp}
                     </p>

@@ -214,23 +214,32 @@ function WhatsAppPanel({ drivers, convs, setConvs, isSendingRef }) {
       }}
     })
 
-    // Converte WebM → WAV antes de enviar (Whisper precisa de PCM)
-    let uploadBlob = audioBlob
-    try { uploadBlob = await blobToWav(audioBlob) } catch (_) { /* usa original se falhar */ }
     setAudioBlob(null)
 
     const form = new FormData()
-    form.append('file', uploadBlob, 'audio.wav')
+    form.append('file', audioBlob, 'audio.webm')
     try {
-      const r = await api.post(`/audio/${selectedId}`, form, { headers: { 'Content-Type': 'multipart/form-data' } })
+      // Fase 1: transcrição — aparece imediatamente no chat
+      const r1 = await api.post(`/transcribe/${selectedId}`, form, { headers: { 'Content-Type': 'multipart/form-data' } })
       setConvs(prev => {
-        const dbState = r.data.state || {}
-        // Usa o estado do DB como fonte de verdade (já contém a mensagem de áudio + resposta).
-        // Apenas restaura audioUrl a partir de audio_url para que o player funcione.
-        const messages = (dbState.messages || []).map(m =>
-          m.type === 'audio' ? { ...m, audioUrl: m.audio_url || undefined } : m
-        )
-        return { ...prev, [selectedId]: { ...dbState, messages } }
+        const current = prev[selectedId] || { messages: [], status: 'idle', context: {} }
+        const msgs = [...(current.messages || [])]
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          if (msgs[i].type === 'audio' && msgs[i].role === 'driver') {
+            msgs[i] = { ...msgs[i], content: r1.data.transcript, audioUrl: r1.data.audio_url || msgs[i].audioUrl }
+            break
+          }
+        }
+        return { ...prev, [selectedId]: { ...current, messages: msgs } }
+      })
+
+      // Fase 2: resposta do agente
+      const r2 = await api.post(`/respond/${selectedId}`, { message: r1.data.transcript })
+      const replyTs = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+      setConvs(prev => {
+        const current = prev[selectedId] || { messages: [], status: 'idle', context: {} }
+        const msgs = [...(current.messages || []), { role: 'assistant', content: r2.data.response, type: 'text', timestamp: replyTs }]
+        return { ...prev, [selectedId]: { ...(r2.data.state || {}), messages: msgs } }
       })
     } catch (e) {
       alert(e.response?.data?.detail || 'Erro na transcrição de áudio.')
@@ -689,14 +698,25 @@ export default function Demo() {
           for (const [dId, serverConv] of Object.entries(serverConvs)) {
             const existing = prev[dId]
             if (!existing?.messages?.length) { merged[dId] = serverConv; continue }
-            const audioUrls = {}
-            existing.messages.forEach(m => { if (m.audioUrl && m.timestamp) audioUrls[m.timestamp] = m.audioUrl })
-            const messages = (serverConv.messages || []).map(m => {
-              if (m.type !== 'audio') return m
-              // Prefer local blob URL (in-progress) → server persisted URL → field from DB
-              const localUrl = m.timestamp && audioUrls[m.timestamp]
-              return { ...m, audioUrl: localUrl || m.audio_url || undefined }
-            })
+
+            const serverMsgs = serverConv.messages || []
+            const localMsgs = existing.messages || []
+
+            let messages
+            if (localMsgs.length > serverMsgs.length) {
+              // Server is behind local optimistic state — keep local messages as-is
+              messages = localMsgs
+            } else {
+              // Server is up-to-date — use server messages, restoring local blob URLs
+              const audioUrls = {}
+              localMsgs.forEach(m => { if (m.audioUrl && m.timestamp) audioUrls[m.timestamp] = m.audioUrl })
+              messages = serverMsgs.map(m => {
+                if (m.type !== 'audio') return m
+                const localUrl = m.timestamp && audioUrls[m.timestamp]
+                return { ...m, audioUrl: localUrl || m.audio_url || undefined }
+              })
+            }
+
             merged[dId] = { ...serverConv, messages }
           }
           return merged

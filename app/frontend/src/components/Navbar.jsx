@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { MessageSquare, Radio, BarChart2, Play, Loader2, Presentation } from 'lucide-react'
+import { MessageSquare, Radio, BarChart2, Play, Loader2, Presentation, Mic } from 'lucide-react'
 import api from '../api/client'
 import motzLogo from '../assets/motz-logo.svg'
 
@@ -8,7 +8,8 @@ const tabs = [
   { path: '/',          label: 'Simulador WhatsApp', Icon: MessageSquare },
   { path: '/ao-vivo',   label: 'Central Ao Vivo',    Icon: Radio },
   { path: '/dashboard', label: 'Dashboard',           Icon: BarChart2 },
-  { path: '/demo',      label: 'Demo',                Icon: Presentation },
+  { path: '/demo',             label: 'Demo',           Icon: Presentation },
+  { path: '/transcribe-test', label: 'Teste Áudio',    Icon: Mic },
 ]
 
 const STATE_CFG = {

@@ -6,7 +6,7 @@ import sys
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import BackgroundTasks, FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -94,6 +94,25 @@ def _get_driver(driver_id: str) -> dict:
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/api/debug-env")
+def debug_env():
+    """Temporary: debug secret fetch for Lakebase auth diagnosis."""
+    import os, base64
+    from databricks.sdk import WorkspaceClient
+    try:
+        w = WorkspaceClient()
+        secret_resp = w.secrets.get_secret(scope="motz-demo", key="lakebase-pat")
+        pat = base64.b64decode(secret_resp.value).decode()
+        secret_status = f"OK len={len(pat)} prefix={pat[:8]}"
+    except Exception as e:
+        secret_status = f"ERROR: {e}"
+    return {
+        "databricks_host": os.environ.get("DATABRICKS_HOST", ""),
+        "has_client_id": bool(os.environ.get("DATABRICKS_CLIENT_ID")),
+        "secret_status": secret_status,
+    }
 
 
 @app.get("/api/backend/status")
@@ -291,6 +310,83 @@ def send_text_message(body: MessageBody):
         "response": response,
         "state": state_mgr.get_conversation(body.driver_id),
     }
+
+
+WHISPER_ENDPOINTS = {
+    "faster-whisper": "faster-whisper-large-v3",
+    "whisper":        "whisper-large-v3",
+}
+
+
+class RespondBody(BaseModel):
+    message: str
+
+
+def _save_driver_audio_msg(driver_id: str, transcript: str, audio_url: str, now: str):
+    """Salva mensagem de áudio do motorista no estado (roda em background)."""
+    conv = state_mgr.get_conversation(driver_id)
+    messages = list(conv.get("messages", []))
+    messages.append({
+        "role": "driver",
+        "content": transcript,
+        "type": "audio",
+        "audio_url": audio_url,
+        "timestamp": now,
+    })
+    conv["messages"] = messages
+    state_mgr.save_conversation_full(driver_id, conv)
+
+
+@app.post("/api/transcribe/{driver_id}")
+async def transcribe_driver_audio(driver_id: str, background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+    """Phase 1: transcribe audio, return transcript immediately, save to DB in background."""
+    from datetime import datetime as dt
+    driver = _get_driver(driver_id)
+    audio_bytes = await file.read()
+
+    audio_filename = f"{uuid.uuid4()}.wav"
+    (AUDIO_DIR / audio_filename).write_bytes(audio_bytes)
+    audio_url = f"/api/audio/{audio_filename}"
+
+    try:
+        transcript = transcribe(audio_bytes, file.filename or "audio.wav")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    now = dt.now().strftime("%H:%M")
+    background_tasks.add_task(_save_driver_audio_msg, driver_id, transcript, audio_url, now)
+
+    return {"transcript": transcript, "audio_url": audio_url}
+
+
+@app.post("/api/respond/{driver_id}")
+def respond_to_driver(driver_id: str, body: RespondBody):
+    """Phase 2: run agent on already-saved transcript, return agent response only."""
+    driver = _get_driver(driver_id)
+    try:
+        response = process_message(body.message, driver, save_driver_msg=False)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return {"response": response, "state": state_mgr.get_conversation(driver_id)}
+
+
+@app.post("/api/transcribe-test")
+async def transcribe_test(
+    file: UploadFile = File(...),
+    endpoint: str = "faster-whisper",
+):
+    """Transcribe an audio file and return the transcript (no agent, no DB)."""
+    import time
+    from core.transcriber import transcribe as _transcribe
+    endpoint_name = WHISPER_ENDPOINTS.get(endpoint, WHISPER_ENDPOINTS["faster-whisper"])
+    audio_bytes = await file.read()
+    t0 = time.time()
+    try:
+        transcript = _transcribe(audio_bytes, file.filename or "audio.wav", endpoint_override=endpoint_name)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    elapsed = round(time.time() - t0, 2)
+    return {"transcript": transcript, "elapsed_s": elapsed, "endpoint": endpoint_name}
 
 
 @app.get("/api/audio/{filename}")

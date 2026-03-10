@@ -2,8 +2,11 @@
 Helper compartilhado para executar SQL no Lakebase (PostgreSQL gerenciado).
 Substitui a conexão via Databricks SQL Warehouse por psycopg2 direto ao Lakebase.
 """
+import base64
 import json
+import os
 import time
+import urllib.request
 from typing import Optional
 
 import psycopg2
@@ -29,21 +32,49 @@ def _get_credentials() -> tuple[str, str]:
     if _cred_cache.get("expires_at", 0) > now + 60:
         return _cred_cache["email"], _cred_cache["token"]
 
-    from databricks.sdk import WorkspaceClient
     from datetime import datetime, timezone
-    w = WorkspaceClient()
+    from databricks.sdk import WorkspaceClient
 
     endpoint_path = (
         f"projects/{LAKEBASE_PROJECT}/branches/{LAKEBASE_BRANCH}"
         f"/endpoints/{LAKEBASE_ENDPOINT}"
     )
-    result = w.api_client.do(
-        "POST",
-        "/api/2.0/postgres/credentials",
-        body={"endpoint": endpoint_path},
+
+    # Detect Databricks Apps environment: client_id + client_secret are injected as M2M OAuth.
+    # In that case, use them to fetch the PAT from the secret scope at runtime, then use
+    # the PAT to generate Lakebase credentials with human user identity (avoids SP role issues).
+    # Locally, fall back to the SDK OAuth flow using the developer's own identity.
+    is_apps_env = bool(
+        os.environ.get("DATABRICKS_CLIENT_ID") and os.environ.get("DATABRICKS_CLIENT_SECRET")
     )
+
+    if is_apps_env:
+        w = WorkspaceClient()
+        secret_resp = w.secrets.get_secret(scope="motz-demo", key="lakebase-pat")
+        pat = base64.b64decode(secret_resp.value).decode()
+
+        host = os.environ.get("DATABRICKS_HOST", "").rstrip("/")
+        if not host.startswith("http"):
+            host = f"https://{host}"
+        req = urllib.request.Request(
+            f"{host}/api/2.0/postgres/credentials",
+            data=json.dumps({"endpoint": endpoint_path}).encode(),
+            headers={"Authorization": f"Bearer {pat}", "Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req) as resp:
+            result = json.loads(resp.read())
+        email = "leticia.santos@databricks.com"
+    else:
+        w = WorkspaceClient()
+        result = w.api_client.do(
+            "POST",
+            "/api/2.0/postgres/credentials",
+            body={"endpoint": endpoint_path},
+        )
+        email = w.current_user.me().user_name
+
     token = result["token"]
-    email = w.current_user.me().user_name
 
     # Usa expire_time da resposta; fallback de 55 min
     expire_time = result.get("expire_time")

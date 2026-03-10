@@ -4,6 +4,7 @@ import WhatsApp from './pages/WhatsApp'
 import AoVivo from './pages/AoVivo'
 import Dashboard from './pages/Dashboard'
 import Demo from './pages/Demo'
+import TranscribeTest from './pages/TranscribeTest'
 
 export default function App() {
   return (
@@ -15,6 +16,7 @@ export default function App() {
           <Route path="/ao-vivo" element={<AoVivo />} />
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/demo" element={<Demo />} />
+          <Route path="/transcribe-test" element={<TranscribeTest />} />
         </Routes>
       </div>
     </BrowserRouter>
